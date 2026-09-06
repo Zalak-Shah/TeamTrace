@@ -3,8 +3,7 @@ import json
 from datetime import datetime
 
 
-DB_NAME = "bordershield.db"
-
+DB_NAME = "/tmp/bordershield.db"
 
 # ============================================================
 # DATABASE CONNECTION
