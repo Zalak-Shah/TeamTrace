@@ -1,5 +1,6 @@
 fastapi
-uvicorn[standard]
-python-multipart
+opencv-python-headless
+numpy
+requests
 python-dotenv
-google-cloud-vision
+python-multipart
