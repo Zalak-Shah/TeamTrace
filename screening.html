@@ -1,0 +1,2512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BorderShield AI — New Screening</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<link rel="stylesheet"
+href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root{
+  --bg:#0B0F1A;
+  --panel:#111726;
+  --panel-2:#0D1220;
+  --border:#1E293B;
+  --border-2:#1B2333;
+  --border-3:#263049;
+
+  --text:#F1F4F9;
+  --text-2:#E5E9F0;
+  --text-3:#B7C0D3;
+  --text-4:#8B96AC;
+  --text-5:#5B6478;
+
+  --cyan:#22D3EE;
+  --indigo:#6366F1;
+
+  --valid:#34D399;
+  --low:#5EEAD4;
+  --medium:#FBBF24;
+  --suspicious:#FB923C;
+  --high:#F87171;
+}
+
+*{
+  box-sizing:border-box;
+}
+
+html,body{
+  margin:0;
+  padding:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:'Inter',sans-serif;
+}
+
+h1,h2,h3,.display{
+  font-family:'Space Grotesk',sans-serif;
+}
+
+.mono{
+  font-family:'JetBrains Mono',monospace;
+}
+
+a{
+  color:inherit;
+  text-decoration:none;
+}
+
+::-webkit-scrollbar{
+  width:8px;
+  height:8px;
+}
+
+::-webkit-scrollbar-thumb{
+  background:var(--border);
+  border-radius:8px;
+}
+
+/* ================= APP ================= */
+
+.app{
+  display:flex;
+  min-height:100vh;
+}
+
+/* ================= SIDEBAR ================= */
+
+.sidebar{
+  width:236px;
+  flex-shrink:0;
+  background:var(--bg);
+  border-right:1px solid var(--border-2);
+  display:flex;
+  flex-direction:column;
+  height:100vh;
+  position:sticky;
+  top:0;
+  z-index:40;
+}
+
+.brand{
+  padding:22px 20px 18px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  border-bottom:1px solid var(--border-2);
+}
+
+.brand-mark{
+  width:32px;
+  height:32px;
+  border-radius:8px;
+  background:linear-gradient(135deg,var(--cyan),var(--indigo));
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:var(--bg);
+  font-weight:700;
+  font-size:15px;
+}
+
+.brand-name{
+  font-weight:600;
+  font-size:15px;
+  color:var(--text);
+}
+
+.brand-sub{
+  font-size:10px;
+  color:var(--text-5);
+  letter-spacing:.5px;
+}
+
+.nav{
+  flex:1;
+  padding:14px 12px;
+}
+
+.nav a{
+  display:flex;
+  align-items:center;
+  gap:11px;
+  padding:10px 12px;
+  border-radius:9px;
+  margin-bottom:3px;
+  color:var(--text-4);
+  font-size:13.5px;
+  font-weight:500;
+}
+
+.nav a:hover{
+  background:#141B2D;
+}
+
+.nav a.active{
+  background:rgba(34,211,238,.1);
+  color:var(--cyan);
+  font-weight:600;
+}
+
+.nav i{
+  font-size:16px;
+  width:16px;
+  text-align:center;
+}
+
+.officer-card{
+  padding:16px;
+  border-top:1px solid var(--border-2);
+}
+
+.officer-inner{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:9px 10px;
+  background:#141B2D;
+  border-radius:10px;
+}
+
+.avatar{
+  width:30px;
+  height:30px;
+  border-radius:50%;
+  background:var(--border);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:12px;
+  font-weight:600;
+  color:var(--cyan);
+}
+
+.officer-name{
+  font-size:12.5px;
+  color:var(--text-2);
+  font-weight:500;
+}
+
+.officer-role{
+  font-size:10.5px;
+  color:var(--text-5);
+}
+
+/* ================= MAIN ================= */
+
+.main{
+  flex:1;
+  min-width:0;
+}
+
+.topbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:20px 28px;
+  border-bottom:1px solid var(--border-2);
+  background:var(--bg);
+}
+
+.page-title{
+  margin:0;
+  font-size:19px;
+  font-weight:600;
+}
+
+.page-sub{
+  margin:3px 0 0;
+  font-size:12.5px;
+  color:var(--text-5);
+}
+
+.status-pill{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  font-size:12px;
+  color:var(--valid);
+  background:rgba(52,211,153,.1);
+  padding:6px 11px;
+  border-radius:999px;
+  border:1px solid rgba(52,211,153,.3);
+}
+
+.content{
+  padding:28px;
+}
+
+/* ================= PANELS ================= */
+
+.panel{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:20px;
+}
+
+.section-title{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-bottom:16px;
+}
+
+.section-title h3{
+  margin:0;
+  font-size:14px;
+  font-weight:600;
+  color:var(--text-2);
+  display:flex;
+  align-items:center;
+  gap:9px;
+}
+
+.section-title i{
+  color:var(--cyan);
+}
+
+.grid{
+  display:grid;
+  gap:16px;
+}
+
+.grid-2{
+  grid-template-columns:1fr 1fr;
+}
+
+/* ================= BUTTONS ================= */
+
+.btn{
+  padding:11px 20px;
+  border-radius:9px;
+  border:none;
+  cursor:pointer;
+  font-size:13px;
+  font-weight:600;
+  font-family:inherit;
+}
+
+.btn-primary{
+  background:linear-gradient(135deg,var(--cyan),var(--indigo));
+  color:var(--bg);
+}
+
+.btn-primary:disabled{
+  opacity:.5;
+  cursor:not-allowed;
+}
+
+.btn-ghost{
+  background:transparent;
+  border:1px solid var(--border-3);
+  color:var(--text-4);
+}
+
+/* ================= DOCUMENT TYPE ================= */
+
+.doctype-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+  gap:10px;
+  margin-bottom:22px;
+}
+
+.doctype-btn{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:8px;
+  padding:16px 10px;
+  border-radius:12px;
+  cursor:pointer;
+  border:1px solid var(--border);
+  background:var(--panel-2);
+  color:var(--text-4);
+  font-size:12.5px;
+  font-weight:500;
+}
+
+.doctype-btn.active{
+  border-color:var(--cyan);
+  background:rgba(34,211,238,.08);
+  color:var(--cyan);
+}
+
+.doctype-btn i{
+  font-size:20px;
+}
+
+/* ================= UPLOAD ================= */
+
+.dropzone{
+  border:1.5px dashed var(--border-3);
+  border-radius:12px;
+  padding:32px 20px;
+  text-align:center;
+  cursor:pointer;
+  margin-bottom:20px;
+  background:var(--panel-2);
+  transition:.2s;
+}
+
+.dropzone:hover{
+  border-color:var(--cyan);
+  background:rgba(34,211,238,.04);
+}
+
+.dropzone i{
+  font-size:28px;
+  color:var(--cyan);
+  margin-bottom:10px;
+}
+
+/* ================= SCENARIOS ================= */
+
+.scenario-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:8px;
+  margin-bottom:20px;
+}
+
+.scenario-btn{
+  padding:10px 12px;
+  border-radius:9px;
+  cursor:pointer;
+  text-align:left;
+  border:1px solid var(--border);
+  background:var(--panel-2);
+  color:var(--text-4);
+  font-size:12px;
+  font-weight:500;
+}
+
+.scenario-btn.active{
+  border-color:var(--cyan);
+  color:var(--cyan);
+}
+
+/* ================= SCANNING ================= */
+
+.step-row{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:10px 6px;
+}
+
+.step-dot{
+  width:28px;
+  height:28px;
+  border-radius:50%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:#161D2E;
+  border:1px solid var(--border-3);
+}
+
+.step-dot.active{
+  border-color:var(--cyan);
+  background:rgba(34,211,238,.12);
+}
+
+.step-dot.done{
+  border-color:var(--valid);
+  background:rgba(52,211,153,.12);
+}
+
+@keyframes pulse{
+  0%,100%{opacity:1}
+  50%{opacity:.4}
+}
+
+.spin{
+  animation:pulse 1s infinite;
+}
+
+/* ================= RESULT ================= */
+
+.result-status{
+  padding:20px;
+  border-radius:12px;
+  background:var(--panel-2);
+}
+
+.issue-card{
+  padding:15px;
+  border-radius:10px;
+  background:var(--panel-2);
+  border:1px solid var(--border);
+  margin-bottom:10px;
+}
+
+.check-item{
+  display:flex;
+  align-items:center;
+  gap:9px;
+  padding:10px;
+  border-radius:9px;
+  background:var(--panel-2);
+  border:1px solid var(--border);
+  margin-bottom:8px;
+}
+
+.field-row{
+  display:flex;
+  justify-content:space-between;
+  gap:15px;
+  padding:9px 2px;
+  border-bottom:1px solid var(--border-2);
+  font-size:12.5px;
+}
+
+@media(max-width:860px){
+
+  .sidebar{
+    display:none;
+  }
+
+  .content{
+    padding:16px;
+  }
+
+  .topbar{
+    padding:16px;
+  }
+
+  .grid-2{
+    grid-template-columns:1fr;
+  }
+
+  .status-pill{
+    display:none;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+<!-- ================= SIDEBAR ================= -->
+
+<div class="sidebar">
+
+  <div class="brand">
+    <div class="brand-mark">
+      <i class="ti ti-shield-check"></i>
+    </div>
+
+    <div>
+      <div class="brand-name">BorderShield</div>
+      <div class="brand-sub">AI DOCUMENT SCREENING</div>
+    </div>
+  </div>
+
+  <div class="nav">
+
+    <a href="index.html">
+      <i class="ti ti-layout-dashboard"></i>
+      Dashboard
+    </a>
+
+    <a href="screening.html" class="active">
+      <i class="ti ti-scan"></i>
+      New screening
+    </a>
+
+    <a href="history.html">
+      <i class="ti ti-history"></i>
+      Screening history
+    </a>
+
+    <a href="identity.html">
+      <i class="ti ti-affiliate"></i>
+      Identity intelligence
+    </a>
+
+    <a href="fraud.html">
+      <i class="ti ti-shield-exclamation"></i>
+      Fraud cases
+    </a>
+
+    <a href="checkpoints.html">
+      <i class="ti ti-map-pin"></i>
+      Checkpoints
+    </a>
+
+    <a href="audit.html">
+      <i class="ti ti-file-clock"></i>
+      Audit logs
+    </a>
+
+    <a href="admin.html">
+      <i class="ti ti-settings"></i>
+      Admin settings
+    </a>
+
+  </div>
+
+  <div class="officer-card">
+    <div class="officer-inner">
+
+      <div class="avatar">RS</div>
+
+      <div>
+        <div class="officer-name">R. Sharma</div>
+        <div class="officer-role">Immigration officer</div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+
+<!-- ================= MAIN ================= -->
+
+<div class="main">
+
+<div class="topbar">
+
+  <div>
+    <h1 class="page-title">New screening</h1>
+    <p class="page-sub">
+      Run AI-powered document and identity verification
+    </p>
+  </div>
+
+  <div class="status-pill">
+    <i class="ti ti-antenna-bars-5"></i>
+    All systems live
+  </div>
+
+</div>
+
+
+<div class="content">
+
+
+<!-- ================================================= -->
+<!-- SETUP SCREEN -->
+<!-- ================================================= -->
+
+<div id="stage-setup" style="max-width:720px;">
+
+<div class="panel">
+
+<div class="section-title">
+  <h3>
+    <i class="ti ti-upload"></i>
+    Document intake
+  </h3>
+</div>
+
+<div style="font-size:12.5px;color:var(--text-4);margin-bottom:14px;">
+  Select the document type presented by the traveller.
+</div>
+
+
+<!-- DOCUMENT TYPES -->
+
+<div class="doctype-grid">
+
+<button class="doctype-btn active" onclick="selectDoc('Passport',this)">
+  <i class="ti ti-book-2"></i>
+  Passport
+</button>
+
+<button class="doctype-btn" onclick="selectDoc('Visa',this)">
+  <i class="ti ti-plane"></i>
+  Visa
+</button>
+
+<button class="doctype-btn" onclick="selectDoc('National ID',this)">
+  <i class="ti ti-id-badge-2"></i>
+  National ID
+</button>
+
+<button class="doctype-btn" onclick="selectDoc('Driving licence',this)">
+  <i class="ti ti-license"></i>
+  Driving licence
+</button>
+
+<button class="doctype-btn" onclick="selectDoc('Permit',this)">
+  <i class="ti ti-file-text"></i>
+  Permit
+</button>
+
+</div>
+
+
+<!-- REAL FILE UPLOAD -->
+
+<!-- ================= DOCUMENT INPUT ================= -->
+
+<input
+type="file"
+id="fileInput"
+accept=".jpg,.jpeg,.png,.pdf"
+style="display:none;"
+onchange="handleFile()"
+/>
+
+
+<div class="grid grid-2" style="margin-bottom:20px;">
+
+  <!-- CAMERA SCAN -->
+
+  <div
+    class="dropzone"
+    style="margin-bottom:0;"
+    onclick="openCamera()">
+
+    <i class="ti ti-camera"></i>
+
+    <div
+      style="
+      font-size:13px;
+      color:var(--text-3);
+      font-weight:600;">
+
+      Scan with Camera
+
+    </div>
+
+    <div
+      style="
+      font-size:11px;
+      color:var(--text-5);
+      margin-top:5px;">
+
+      Recommended for checkpoint screening
+
+    </div>
+
+  </div>
+
+
+  <!-- FILE UPLOAD -->
+
+  <div
+    class="dropzone"
+    style="margin-bottom:0;"
+    onclick="document.getElementById('fileInput').click()">
+
+    <i class="ti ti-upload"></i>
+
+    <div
+      id="dropzone-text"
+      style="
+      font-size:13px;
+      color:var(--text-3);
+      font-weight:600;">
+
+      Upload File
+
+    </div>
+
+    <div
+      style="
+      font-size:11px;
+      color:var(--text-5);
+      margin-top:5px;">
+
+      JPG, PNG or PDF
+
+    </div>
+
+  </div>
+
+</div>
+
+
+<!-- ================= CAMERA MODAL ================= -->
+
+<div
+  id="cameraModal"
+  style="
+  display:none;
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.85);
+  z-index:999;
+  align-items:center;
+  justify-content:center;
+  padding:20px;">
+
+  <div
+    class="panel"
+    style="
+    width:min(700px,100%);
+    position:relative;">
+
+    <div class="section-title">
+
+      <h3>
+        <i class="ti ti-camera"></i>
+        Scan Document
+      </h3>
+
+      <button
+        class="btn btn-ghost"
+        onclick="closeCamera()">
+
+        <i class="ti ti-x"></i>
+        Close
+
+      </button>
+
+    </div>
+
+
+    <!-- CAMERA PREVIEW -->
+
+    <div
+      style="
+      position:relative;
+      width:100%;
+      background:#000;
+      border-radius:12px;
+      overflow:hidden;">
+
+      <video
+        id="cameraVideo"
+        autoplay
+        playsinline
+        style="
+        width:100%;
+        display:block;
+        max-height:500px;
+        object-fit:cover;">
+      </video>
+
+
+      <!-- SCAN FRAME -->
+
+      <div
+        style="
+        position:absolute;
+        inset:12%;
+        border:2px solid var(--cyan);
+        border-radius:12px;
+        pointer-events:none;">
+
+      </div>
+
+    </div>
+
+
+    <!-- CAMERA STATUS -->
+
+    <div
+      id="cameraStatus"
+      style="
+      margin-top:12px;
+      font-size:12px;
+      color:var(--text-4);
+      text-align:center;">
+
+      Position the document inside the frame
+
+    </div>
+
+
+    <!-- CAMERA BUTTONS -->
+
+    <div
+      style="
+      display:flex;
+      justify-content:center;
+      gap:12px;
+      margin-top:16px;">
+
+      <button
+        class="btn btn-primary"
+        onclick="captureDocument()">
+
+        <i class="ti ti-camera"></i>
+        Capture Document
+
+      </button>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+<!-- HIDDEN CANVAS -->
+
+<canvas
+id="cameraCanvas"
+style="display:none;">
+</canvas>
+
+
+<!-- DEMO SCENARIO -->
+
+<div style="margin-bottom:12px;">
+
+<div style="font-size:12.5px;color:var(--text-4);margin-bottom:10px;">
+Demo scenario
+</div>
+
+<div class="scenario-grid">
+
+<button class="scenario-btn active"
+onclick="selectScenario('clean',this)">
+Clean document
+</button>
+
+<button class="scenario-btn"
+onclick="selectScenario('discrepancy',this)">
+Minor discrepancy
+</button>
+
+<button class="scenario-btn"
+onclick="selectScenario('tampered',this)">
+Tampered document
+</button>
+
+<button class="scenario-btn"
+onclick="selectScenario('fraud_ring',this)">
+Fraud ring match
+</button>
+
+</div>
+
+</div>
+
+
+<!-- START BUTTON -->
+
+<button
+class="btn btn-primary"
+style="width:100%;"
+id="scanButton"
+onclick="startScreening()">
+
+<i class="ti ti-scan"></i>
+Run AI screening
+
+</button>
+
+</div>
+</div>
+
+
+<!-- ================================================= -->
+<!-- SCANNING SCREEN -->
+<!-- ================================================= -->
+
+<div id="stage-scanning"
+style="max-width:620px;display:none;">
+
+<div class="panel">
+
+<div class="section-title">
+
+<h3>
+<i class="ti ti-scan"></i>
+Screening in progress
+</h3>
+
+</div>
+
+<div style="font-size:12.5px;color:var(--text-4);margin-bottom:20px;">
+
+Analyzing:
+
+<span id="scan-filename"
+class="mono"
+style="color:var(--cyan);">
+</span>
+
+</div>
+
+<div id="step-list"></div>
+
+</div>
+</div>
+
+
+<!-- ================================================= -->
+<!-- RESULTS -->
+<!-- ================================================= -->
+
+<div id="stage-results"
+style="display:none;"></div>
+
+
+</div>
+</div>
+</div>
+
+
+<!-- ================================================= -->
+<!-- JAVASCRIPT -->
+<!-- ================================================= -->
+
+<script>
+
+/* ============================================= */
+/* CONFIGURATION */
+/* ============================================= */
+
+const API_URL = "http://127.0.0.1:8000/api/screen";
+
+
+/* ============================================= */
+/* VARIABLES */
+/* ============================================= */
+
+let selectedDocumentType = "Passport";
+let selectedScenario = "clean";
+let selectedFile = null;
+
+let cameraStream = null;
+
+
+/* ============================================= */
+/* DOCUMENT TYPE */
+/* ============================================= */
+
+function selectDoc(type, element){
+
+  selectedDocumentType = type;
+
+  document.querySelectorAll(".doctype-btn")
+    .forEach(btn => btn.classList.remove("active"));
+
+  element.classList.add("active");
+
+}
+
+
+/* ============================================= */
+/* SCENARIO */
+/* ============================================= */
+
+function selectScenario(scenario, element){
+
+  selectedScenario = scenario;
+
+  document.querySelectorAll(".scenario-btn")
+    .forEach(btn => btn.classList.remove("active"));
+
+  element.classList.add("active");
+
+}
+
+
+/* ============================================= */
+/* FILE UPLOAD */
+/* ============================================= */
+/* ============================================= */
+/* CAMERA SCANNER */
+/* ============================================= */
+
+async function openCamera(){
+
+  const modal =
+    document.getElementById("cameraModal");
+
+  const video =
+    document.getElementById("cameraVideo");
+
+  const status =
+    document.getElementById("cameraStatus");
+
+
+  modal.style.display = "flex";
+
+  status.textContent =
+    "Opening camera...";
+
+
+  try{
+
+    cameraStream =
+      await navigator.mediaDevices.getUserMedia({
+
+        video:{
+          facingMode:"environment",
+
+          width:{
+            ideal:1920
+          },
+
+          height:{
+            ideal:1080
+          }
+
+        },
+
+        audio:false
+
+      });
+
+
+    video.srcObject =
+      cameraStream;
+
+
+    status.textContent =
+      "Position the document inside the frame";
+
+
+  }
+
+  catch(error){
+
+    console.error(error);
+
+    status.textContent =
+      "Camera access failed. Please allow camera permission.";
+
+  }
+
+}
+
+
+/* ============================================= */
+/* CLOSE CAMERA */
+/* ============================================= */
+
+function closeCamera(){
+
+  const modal =
+    document.getElementById("cameraModal");
+
+  const video =
+    document.getElementById("cameraVideo");
+
+
+  if(cameraStream){
+
+    cameraStream
+      .getTracks()
+      .forEach(track => track.stop());
+
+    cameraStream = null;
+
+  }
+
+
+  video.srcObject = null;
+
+  modal.style.display = "none";
+
+}
+
+
+/* ============================================= */
+/* CAPTURE DOCUMENT */
+/* ============================================= */
+
+function captureDocument(){
+
+  const video =
+    document.getElementById("cameraVideo");
+
+  const canvas =
+    document.getElementById("cameraCanvas");
+
+
+  if(!video.videoWidth){
+
+    alert(
+      "Camera is not ready yet."
+    );
+
+    return;
+
+  }
+
+
+  const MAX_WIDTH = 1600;
+
+
+  let width =
+    video.videoWidth;
+
+  let height =
+    video.videoHeight;
+
+
+  /* Resize large camera images */
+
+  if(width > MAX_WIDTH){
+
+    const scale =
+      MAX_WIDTH / width;
+
+    width =
+      Math.round(width * scale);
+
+    height =
+      Math.round(height * scale);
+
+  }
+
+
+  canvas.width = width;
+
+  canvas.height = height;
+
+
+  const context =
+    canvas.getContext("2d");
+
+
+  context.drawImage(
+
+    video,
+
+    0,
+    0,
+
+    width,
+    height
+
+  );
+
+
+  /* Convert directly to compressed JPEG */
+
+  canvas.toBlob(
+
+    function(blob){
+
+      if(!blob){
+
+        alert(
+          "Could not capture the document."
+        );
+
+        return;
+
+      }
+
+
+      /* Create file object */
+
+      selectedFile = new File(
+
+        [blob],
+
+        `camera_document_${Date.now()}.jpg`,
+
+        {
+          type:"image/jpeg"
+        }
+
+      );
+
+
+      /* Update UI */
+
+      document
+        .getElementById("dropzone-text")
+        .innerHTML = `
+
+          <strong style="color:var(--cyan);">
+
+            Camera document captured
+
+          </strong>
+
+          <br>
+
+          <span
+            style="
+            font-size:11px;
+            color:var(--text-5);">
+
+            ${formatFileSize(selectedFile.size)}
+
+          </span>
+
+        `;
+
+
+      closeCamera();
+
+
+      /* Optional status */
+
+      console.log(
+        "Document captured:",
+        selectedFile
+      );
+
+    },
+
+    "image/jpeg",
+
+    0.88
+
+  );
+
+}
+function handleFile(){
+
+  const input = document.getElementById("fileInput");
+
+  if(!input.files || input.files.length === 0){
+    return;
+  }
+
+  selectedFile = input.files[0];
+
+  document.getElementById("dropzone-text").innerHTML = `
+    <strong style="color:var(--cyan);">
+      ${selectedFile.name}
+    </strong>
+    <br>
+    <span style="font-size:11px;color:var(--text-5);">
+      ${formatFileSize(selectedFile.size)}
+    </span>
+  `;
+
+}
+
+
+/* ============================================= */
+/* FILE SIZE FORMAT */
+/* ============================================= */
+
+function formatFileSize(bytes){
+
+  if(bytes < 1024){
+    return bytes + " Bytes";
+  }
+
+  if(bytes < 1024 * 1024){
+    return (bytes / 1024).toFixed(2) + " KB";
+  }
+
+  return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+
+}
+
+
+/* ============================================= */
+/* SAFE TEXT */
+/* Prevent HTML injection */
+/* ============================================= */
+
+function escapeHTML(value){
+
+  if(value === null || value === undefined){
+    return "—";
+  }
+
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+
+}
+
+
+/* ============================================= */
+/* REAL SCREENING STEPS */
+/* ============================================= */
+
+const STEPS = [
+
+  {
+    label: "Uploading document",
+    icon: "ti-upload"
+  },
+
+  {
+    label: "Reading document with OCR",
+    icon: "ti-file-text"
+  },
+
+  {
+    label: "Detecting document type",
+    icon: "ti-search"
+  },
+
+  {
+    label: "Extracting document fields",
+    icon: "ti-file-description"
+  },
+
+  {
+    label: "Running validation rules",
+    icon: "ti-shield-check"
+  },
+
+  {
+    label: "Calculating risk score",
+    icon: "ti-chart-bar"
+  }
+
+];
+
+
+/* ============================================= */
+/* START SCREENING */
+/* ============================================= */
+
+async function startScreening(){
+
+  if(!selectedFile){
+
+    alert("Please upload a JPG, PNG or PDF document first.");
+
+    return;
+
+  }
+
+
+  /* Hide setup */
+
+  document.getElementById("stage-setup").style.display = "none";
+
+  document.getElementById("stage-results").style.display = "none";
+
+  document.getElementById("stage-scanning").style.display = "block";
+
+
+  /* Show filename */
+
+  document.getElementById("scan-filename").textContent =
+    selectedFile.name;
+
+
+  /* Create steps */
+
+  const list =
+    document.getElementById("step-list");
+
+
+  list.innerHTML = STEPS.map((step,index) => `
+
+    <div class="step-row">
+
+      <div
+        class="step-dot"
+        id="dot-${index}">
+
+        <i
+          class="ti ${step.icon}"
+          style="color:var(--text-5);">
+        </i>
+
+      </div>
+
+
+      <span
+        id="label-${index}"
+        style="font-size:13px;color:var(--text-5);">
+
+        ${step.label}
+
+      </span>
+
+
+      <span
+        id="status-${index}"
+        style="margin-left:auto;font-size:11px;">
+
+      </span>
+
+    </div>
+
+  `).join("");
+
+
+  let currentStep = 0;
+
+
+  function updateStep(index, state){
+
+    const dot =
+      document.getElementById(`dot-${index}`);
+
+    const label =
+      document.getElementById(`label-${index}`);
+
+    const status =
+      document.getElementById(`status-${index}`);
+
+
+    if(!dot || !label || !status){
+      return;
+    }
+
+
+    if(state === "active"){
+
+      dot.classList.add("active");
+
+      label.style.color = "var(--text-2)";
+
+      status.innerHTML =
+        `<span style="color:var(--cyan);">Processing...</span>`;
+
+    }
+
+
+    if(state === "done"){
+
+      dot.classList.remove("active");
+
+      dot.classList.add("done");
+
+      dot.innerHTML = `
+        <i
+          class="ti ti-circle-check"
+          style="color:var(--valid);">
+        </i>
+      `;
+
+      label.style.color = "var(--text-3)";
+
+      status.innerHTML =
+        `<span style="color:var(--valid);">Done</span>`;
+
+    }
+
+  }
+
+
+  /* Start visual animation */
+
+  const animation = setInterval(() => {
+
+    if(currentStep > 0){
+
+      updateStep(
+        currentStep - 1,
+        "done"
+      );
+
+    }
+
+
+    if(currentStep < STEPS.length){
+
+      updateStep(
+        currentStep,
+        "active"
+      );
+
+      currentStep++;
+
+    }
+
+  }, 700);
+
+
+  /* ============================================= */
+  /* SEND REAL FILE TO BACKEND */
+  /* ============================================= */
+
+  try{
+
+    const formData = new FormData();
+
+    formData.append(
+      "file",
+      selectedFile
+    );
+    formData.append(
+    "expected_document_type",
+    selectedDocumentType
+);
+    
+    const response = await fetch(API_URL, {
+
+      method: "POST",
+
+      body: formData
+
+    });
+
+
+    const data = await response.json();
+
+
+    clearInterval(animation);
+
+
+    /* Mark all steps completed */
+
+    for(let i = 0; i < STEPS.length; i++){
+
+      updateStep(i, "done");
+
+    }
+
+
+    /* Handle backend error */
+
+    if(!response.ok){
+
+      throw new Error(
+        data.detail ||
+        "The backend could not process this document."
+      );
+
+    }
+
+
+    /* Small delay for smooth UI */
+
+    setTimeout(() => {
+
+      showResults(data);
+
+    }, 500);
+
+
+  }
+
+  catch(error){
+
+    clearInterval(animation);
+
+    console.error(error);
+
+    showBackendError(error.message);
+
+  }
+
+}
+
+
+/* ============================================= */
+/* BACKEND ERROR SCREEN */
+/* ============================================= */
+
+function showBackendError(message){
+
+  document.getElementById("stage-scanning").style.display =
+    "none";
+
+
+  const results =
+    document.getElementById("stage-results");
+
+
+  results.style.display = "block";
+
+
+  results.innerHTML = `
+
+    <div class="panel">
+
+      <div class="section-title">
+
+        <h3>
+
+          <i class="ti ti-alert-triangle"></i>
+
+          Screening failed
+
+        </h3>
+
+      </div>
+
+
+      <div
+        style="
+        padding:20px;
+        border-radius:10px;
+        background:rgba(239,68,68,.08);
+        border:1px solid rgba(239,68,68,.35);">
+
+        <div
+          style="
+          color:var(--high);
+          font-size:17px;
+          font-weight:700;
+          margin-bottom:10px;">
+
+          Backend Error
+
+        </div>
+
+
+        <div
+          style="
+          color:var(--text-3);
+          font-size:13px;
+          line-height:1.6;">
+
+          ${escapeHTML(message)}
+
+        </div>
+
+      </div>
+
+
+      <div style="margin-top:16px;">
+
+        <button
+          class="btn btn-primary"
+          onclick="location.reload()">
+
+          <i class="ti ti-refresh"></i>
+
+          Try Again
+
+        </button>
+
+      </div>
+
+    </div>
+
+  `;
+
+}
+
+
+/* ============================================= */
+/* SHOW RESULTS */
+/* ============================================= */
+
+function showResults(data){
+
+  document.getElementById("stage-scanning").style.display =
+    "none";
+
+
+  const results =
+    document.getElementById("stage-results");
+
+
+  results.style.display = "block";
+
+
+  /* ============================================= */
+  /* REAL BACKEND VALUES */
+  /* ============================================= */
+
+  const status =
+    data.status || "UNKNOWN";
+
+
+  const riskScore =
+    typeof data.risk_score === "number"
+      ? data.risk_score
+      : 0;
+
+
+  /* IMPORTANT: REAL DETECTED DOCUMENT TYPE */
+
+  const documentType =
+    data.document_type ||
+    selectedDocumentType ||
+    "Unknown";
+
+
+  const issues =
+    Array.isArray(data.issues)
+      ? data.issues
+      : [];
+
+
+  const verifiedChecks =
+    Array.isArray(data.verified_checks)
+      ? data.verified_checks
+      : [];
+
+
+  const extractedFields =
+    data.extracted_fields || {};
+
+
+  const name =
+    extractedFields.name_guess || "Not detected";
+
+
+  const documentNumber =
+    extractedFields.document_number || "Not detected";
+
+
+  const dates =
+    Array.isArray(extractedFields.dates_found)
+      ? extractedFields.dates_found
+      : [];
+
+
+  const datesText =
+    dates.length > 0
+      ? dates.join(", ")
+      : "Not detected";
+
+
+  /* ============================================= */
+  /* STATUS COLOR */
+  /* ============================================= */
+
+  let statusColor = "var(--valid)";
+
+  let statusIcon = "ti-circle-check";
+
+
+  if(status.includes("REVIEW")){
+
+    statusColor = "var(--medium)";
+
+    statusIcon = "ti-alert-triangle";
+
+  }
+
+
+  if(status.includes("SUSPICIOUS")){
+
+    statusColor = "var(--suspicious)";
+
+    statusIcon = "ti-alert-triangle";
+
+  }
+
+
+  if(status.includes("HIGH")){
+
+    statusColor = "var(--high)";
+
+    statusIcon = "ti-alert-triangle";
+
+  }
+
+
+  /* ============================================= */
+  /* ISSUES HTML */
+  /* ============================================= */
+
+  const issuesHTML =
+
+    issues.length === 0
+
+    ?
+
+    `
+
+    <div
+      style="
+      padding:18px;
+      border-radius:10px;
+      background:rgba(52,211,153,.06);
+      border:1px solid rgba(52,211,153,.25);
+      display:flex;
+      align-items:center;
+      gap:10px;
+      color:var(--valid);
+      font-size:13px;">
+
+      <i
+        class="ti ti-circle-check"
+        style="font-size:20px;">
+      </i>
+
+      No issues were detected by the current validation rules.
+
+    </div>
+
+    `
+
+    :
+
+    issues.map(issue => {
+
+      const severity =
+        issue.severity || "UNKNOWN";
+
+
+      let issueColor = "var(--medium)";
+
+
+      if(severity === "HIGH"){
+        issueColor = "var(--high)";
+      }
+
+
+      if(severity === "LOW"){
+        issueColor = "var(--valid)";
+      }
+
+
+      return `
+
+        <div class="issue-card">
+
+          <div
+            style="
+            color:${issueColor};
+            font-weight:600;
+            font-size:13px;">
+
+            <i class="ti ti-alert-triangle"></i>
+
+            ${escapeHTML(
+              issue.title ||
+              "Document issue detected"
+            )}
+
+          </div>
+
+
+          <div
+            style="
+            margin-top:6px;
+            color:var(--text-5);
+            font-size:11px;">
+
+            Severity:
+            ${escapeHTML(severity)}
+
+          </div>
+
+
+          <div
+            style="
+            margin-top:8px;
+            color:var(--text-4);
+            font-size:12px;
+            line-height:1.5;">
+
+            ${escapeHTML(
+              issue.description ||
+              "No description available."
+            )}
+
+          </div>
+
+        </div>
+
+      `;
+
+    }).join("");
+
+
+  /* ============================================= */
+  /* VERIFIED CHECKS HTML */
+  /* ============================================= */
+
+  const checksHTML =
+
+    verifiedChecks.length === 0
+
+    ?
+
+    `
+
+    <div
+      style="
+      padding:14px;
+      color:var(--text-4);
+      font-size:13px;">
+
+      No verified checks were returned.
+
+    </div>
+
+    `
+
+    :
+
+    verifiedChecks.map(check => `
+
+      <div class="check-item">
+
+        <i
+          class="ti ti-circle-check"
+          style="
+          color:var(--valid);
+          font-size:18px;">
+        </i>
+
+
+        <span
+          style="
+          color:var(--text-3);
+          font-size:12.5px;">
+
+          ${escapeHTML(check)}
+
+        </span>
+
+      </div>
+
+    `).join("");
+
+
+  /* ============================================= */
+  /* RESULTS UI */
+  /* ============================================= */
+
+  results.innerHTML = `
+
+
+  <!-- BACK BUTTON -->
+
+  <div style="margin-bottom:16px;">
+
+    <button
+      class="btn btn-ghost"
+      onclick="location.reload()">
+
+      <i class="ti ti-arrow-left"></i>
+
+      New Screening
+
+    </button>
+
+  </div>
+
+
+  <!-- RESULT STATUS -->
+
+  <div
+    class="panel"
+    style="margin-bottom:16px;">
+
+    <div class="section-title">
+
+      <h3>
+
+        <i class="ti ti-shield-check"></i>
+
+        Document screening result
+
+      </h3>
+
+    </div>
+
+
+    <div
+      class="result-status"
+      style="border:1px solid ${statusColor};">
+
+
+      <div
+        style="
+        display:flex;
+        align-items:center;
+        gap:14px;
+        flex-wrap:wrap;">
+
+
+        <div
+          style="
+          width:54px;
+          height:54px;
+          border-radius:12px;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          background:var(--panel);">
+
+          <i
+            class="ti ${statusIcon}"
+            style="
+            font-size:28px;
+            color:${statusColor};">
+          </i>
+
+        </div>
+
+
+        <div style="flex:1;">
+
+          <div
+            style="
+            font-size:22px;
+            font-weight:700;
+            color:${statusColor};">
+
+            ${escapeHTML(status)}
+
+          </div>
+
+
+          <div
+            style="
+            margin-top:5px;
+            font-size:12.5px;
+            color:var(--text-4);">
+
+            ${escapeHTML(
+              data.message ||
+              "Document analyzed successfully."
+            )}
+
+          </div>
+
+        </div>
+
+
+        <div
+          style="
+          padding:10px 14px;
+          background:var(--panel);
+          border-radius:9px;
+          border:1px solid var(--border);">
+
+          <div
+            style="
+            font-size:11px;
+            color:var(--text-5);">
+
+            Risk score
+
+          </div>
+
+
+          <div
+            style="
+            font-size:22px;
+            font-weight:700;
+            color:${statusColor};">
+
+            ${riskScore}/100
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+
+  <!-- DOCUMENT INFORMATION -->
+
+  <div
+    class="grid grid-2"
+    style="margin-bottom:16px;">
+
+
+    <!-- UPLOADED FILE -->
+
+    <div class="panel">
+
+      <div class="section-title">
+
+        <h3>
+
+          <i class="ti ti-file"></i>
+
+          Uploaded document
+
+        </h3>
+
+      </div>
+
+
+      <div
+        style="
+        padding:25px;
+        background:var(--panel-2);
+        border:1px solid var(--border);
+        border-radius:10px;
+        text-align:center;">
+
+        <i
+          class="ti ti-file-check"
+          style="
+          font-size:40px;
+          color:var(--cyan);">
+        </i>
+
+
+        <div
+          style="
+          margin-top:10px;
+          color:var(--text-3);
+          font-size:13px;">
+
+          ${escapeHTML(selectedFile.name)}
+
+        </div>
+
+      </div>
+
+
+      <div
+        class="field-row"
+        style="margin-top:15px;">
+
+        <span style="color:var(--text-5);">
+          Document type
+        </span>
+
+        <span
+          style="
+          color:var(--cyan);
+          font-weight:600;">
+
+          ${escapeHTML(documentType)}
+
+        </span>
+
+      </div>
+
+
+      <div class="field-row">
+
+        <span style="color:var(--text-5);">
+          File format
+        </span>
+
+        <span style="color:var(--text-3);">
+
+          ${escapeHTML(
+            selectedFile.type || "Unknown"
+          )}
+
+        </span>
+
+      </div>
+
+
+      <div class="field-row">
+
+        <span style="color:var(--text-5);">
+          File size
+        </span>
+
+        <span style="color:var(--text-3);">
+
+          ${formatFileSize(selectedFile.size)}
+
+        </span>
+
+      </div>
+
+    </div>
+
+
+    <!-- SCREENING SUMMARY -->
+
+    <div class="panel">
+
+      <div class="section-title">
+
+        <h3>
+
+          <i class="ti ti-clipboard-check"></i>
+
+          Screening summary
+
+        </h3>
+
+      </div>
+
+
+      <div
+        style="
+        display:grid;
+        grid-template-columns:1fr 1fr;
+        gap:10px;">
+
+
+        <div
+          style="
+          padding:16px;
+          background:var(--panel-2);
+          border:1px solid var(--border);
+          border-radius:10px;">
+
+          <div
+            style="
+            font-size:22px;
+            color:var(--high);
+            font-weight:700;">
+
+            ${issues.length}
+
+          </div>
+
+
+          <div
+            style="
+            font-size:11px;
+            color:var(--text-5);
+            margin-top:5px;">
+
+            Issues found
+
+          </div>
+
+        </div>
+
+
+        <div
+          style="
+          padding:16px;
+          background:var(--panel-2);
+          border:1px solid var(--border);
+          border-radius:10px;">
+
+          <div
+            style="
+            font-size:22px;
+            color:var(--valid);
+            font-weight:700;">
+
+            ${verifiedChecks.length}
+
+          </div>
+
+
+          <div
+            style="
+            font-size:11px;
+            color:var(--text-5);
+            margin-top:5px;">
+
+            Checks passed
+
+          </div>
+
+        </div>
+
+      </div>
+
+
+      <div
+        style="
+        margin-top:16px;
+        padding:14px;
+        border-radius:10px;
+        background:var(--panel-2);
+        border:1px solid var(--border);
+        font-size:12.5px;
+        color:var(--text-4);
+        line-height:1.6;">
+
+        <strong style="color:var(--text-2);">
+          Backend response:
+        </strong>
+
+        <br>
+
+        ${escapeHTML(
+          data.note ||
+          data.message ||
+          "Document analysis completed."
+        )}
+
+      </div>
+
+    </div>
+
+  </div>
+
+
+  <!-- EXTRACTED INFORMATION -->
+
+  <div
+    class="panel"
+    style="margin-bottom:16px;">
+
+    <div class="section-title">
+
+      <h3>
+
+        <i class="ti ti-file-description"></i>
+
+        Extracted information
+
+      </h3>
+
+    </div>
+
+
+    <div class="field-row">
+
+      <span style="color:var(--text-5);">
+        Name
+      </span>
+
+      <span style="color:var(--text-3);">
+
+        ${escapeHTML(name)}
+
+      </span>
+
+    </div>
+
+
+    <div class="field-row">
+
+      <span style="color:var(--text-5);">
+        Document number
+      </span>
+
+      <span
+        class="mono"
+        style="color:var(--cyan);">
+
+        ${escapeHTML(documentNumber)}
+
+      </span>
+
+    </div>
+
+
+    <div class="field-row">
+
+      <span style="color:var(--text-5);">
+        Dates found
+      </span>
+
+      <span style="color:var(--text-3);">
+
+        ${escapeHTML(datesText)}
+
+      </span>
+
+    </div>
+
+
+    <div
+      style="
+      margin-top:14px;
+      font-size:11px;
+      color:var(--text-5);">
+
+      Extracted fields are OCR/heuristic results and should be reviewed when accuracy is critical.
+
+    </div>
+
+  </div>
+
+
+  <!-- ISSUES -->
+
+  <div
+    class="panel"
+    style="margin-bottom:16px;">
+
+    <div class="section-title">
+
+      <h3>
+
+        <i class="ti ti-alert-triangle"></i>
+
+        Detected issues
+
+      </h3>
+
+    </div>
+
+
+    ${issuesHTML}
+
+  </div>
+
+
+  <!-- VERIFIED CHECKS -->
+
+  <div
+    class="panel"
+    style="margin-bottom:16px;">
+
+    <div class="section-title">
+
+      <h3>
+
+        <i class="ti ti-circle-check"></i>
+
+        Verified checks
+
+      </h3>
+
+    </div>
+
+
+    ${checksHTML}
+
+  </div>
+
+
+  <!-- OFFICER ACTION -->
+
+  <div class="panel">
+
+    <div class="section-title">
+
+      <h3>
+
+        <i class="ti ti-user-check"></i>
+
+        Officer action
+
+      </h3>
+
+    </div>
+
+
+    <div
+      style="
+      font-size:12.5px;
+      color:var(--text-4);
+      margin-bottom:16px;">
+
+      Review the screening result and record the final decision.
+
+    </div>
+
+
+    <div
+      style="
+      display:flex;
+      justify-content:flex-end;
+      gap:10px;
+      flex-wrap:wrap;">
+
+      <button
+        class="btn btn-ghost"
+        onclick="location.reload()">
+
+        Discard
+
+      </button>
+
+
+      <button
+        class="btn btn-primary"
+        onclick="alert('Decision recorded in the current prototype.')">
+
+        <i class="ti ti-check"></i>
+
+        Confirm & log decision
+
+      </button>
+
+    </div>
+
+  </div>
+
+  `;
+
+}
+
+</script>
+
+</body>
+</html>

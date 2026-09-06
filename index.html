@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BorderShield AI — Command Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <div class="scrim" id="scrim" style="display:none;"></div>
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main">
+    <div class="topbar" id="topbar"></div>
+    <div class="content">
+
+      <div class="grid grid-4" style="margin-bottom:16px;">
+        <div class="panel">
+          <div class="stat-label">Screenings today</div>
+          <div class="stat-value" id="stat-total">—</div>
+          <div class="stat-sub">Across 5 checkpoints</div>
+        </div>
+        <div class="panel">
+          <div class="stat-label">Average risk score</div>
+          <div class="stat-value" id="stat-avg" style="color:var(--cyan);">—</div>
+          <div class="stat-sub">out of 100</div>
+        </div>
+        <div class="panel">
+          <div class="stat-label">Cleared documents</div>
+          <div class="stat-value" id="stat-valid" style="color:var(--valid);">—</div>
+          <div class="stat-sub" id="stat-valid-sub">&nbsp;</div>
+        </div>
+        <div class="panel">
+          <div class="stat-label">Flagged for review</div>
+          <div class="stat-value" id="stat-flagged" style="color:var(--high);">—</div>
+          <div class="stat-sub">Suspicious or high risk</div>
+        </div>
+      </div>
+
+      <div class="grid grid-13" style="margin-bottom:16px;">
+        <div class="panel">
+          <div class="section-title">
+            <h3><i class="ti ti-history"></i>Recent screenings</h3>
+            <a class="ghost-link" href="history.html">View all <i class="ti ti-chevron-right"></i></a>
+          </div>
+          <div id="recent-list"></div>
+        </div>
+        <div class="panel">
+          <div class="section-title"><h3><i class="ti ti-shield-exclamation"></i>Risk distribution</h3></div>
+          <div id="risk-dist" style="display:flex;flex-direction:column;gap:12px;"></div>
+        </div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="panel">
+          <div class="section-title">
+            <h3><i class="ti ti-map-pin"></i>Checkpoint load</h3>
+            <a class="ghost-link" href="checkpoints.html">View all <i class="ti ti-chevron-right"></i></a>
+          </div>
+          <div id="checkpoint-load" style="display:flex;flex-direction:column;gap:10px;"></div>
+        </div>
+        <div class="panel">
+          <div class="section-title">
+            <h3><i class="ti ti-shield-exclamation"></i>Active fraud cases</h3>
+            <a class="ghost-link" href="fraud.html">View all <i class="ti ti-chevron-right"></i></a>
+          </div>
+          <div id="fraud-preview" style="display:flex;flex-direction:column;gap:10px;"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+renderChrome({ active: "dashboard", title: "Command dashboard", subtitle: "Live overview across all checkpoints" });
+
+const total = HISTORY.length;
+const validCount = HISTORY.filter(h => h.riskKey === "VALID").length;
+const flagged = HISTORY.filter(h => h.riskKey === "HIGH" || h.riskKey === "SUSPICIOUS").length;
+const avg = Math.round(HISTORY.reduce((a,h) => a + h.score, 0) / total);
+
+document.getElementById("stat-total").textContent = total;
+document.getElementById("stat-avg").textContent = avg;
+document.getElementById("stat-valid").textContent = validCount;
+document.getElementById("stat-valid-sub").textContent = Math.round(validCount/total*100) + "% of total";
+document.getElementById("stat-flagged").textContent = flagged;
+
+document.getElementById("recent-list").innerHTML = HISTORY.slice(0,6).map(h => `
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--border-2);">
+    <div style="min-width:0;">
+      <div style="font-size:13px;color:var(--text-2);font-weight:500;">${h.name}</div>
+      <div style="font-size:11.5px;color:var(--text-5);margin-top:2px;">${h.documentType} • ${h.checkpoint} • ${h.date}</div>
+    </div>
+    ${riskBadge(h.riskKey, "sm")}
+  </div>`).join("");
+
+const riskCounts = Object.keys(RISK).map(k => ({ key: k, count: HISTORY.filter(h => h.riskKey === k).length }));
+const maxCount = Math.max(...riskCounts.map(r => r.count), 1);
+document.getElementById("risk-dist").innerHTML = riskCounts.map(r => `
+  <div>
+    <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px;">
+      <span style="color:var(--text-4);">${RISK[r.key].label}</span>
+      <span style="color:var(--text-2);font-weight:500;">${r.count}</span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" style="width:${(r.count/maxCount)*100}%;background:var(--${r.key.toLowerCase()});"></div></div>
+  </div>`).join("");
+
+document.getElementById("checkpoint-load").innerHTML = CHECKPOINTS.map(c => `
+  <div style="display:flex;justify-content:space-between;font-size:12.5px;">
+    <span style="color:var(--text-3);">${c.name}</span>
+    <span style="color:${c.status === "Elevated" ? "var(--suspicious)" : "var(--text-5)"};font-size:11.5px;">${c.screeningsToday} today</span>
+  </div>`).join("");
+
+document.getElementById("fraud-preview").innerHTML = FRAUD_CASES.filter(f => f.status !== "Resolved").slice(0,3).map(f => `
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+    <span style="font-size:12.5px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.title}</span>
+    ${riskBadge(f.riskKey, "sm")}
+  </div>`).join("");
+</script>
+</body>
+</html>

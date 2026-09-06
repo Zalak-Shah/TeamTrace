@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BorderShield AI — Screening History</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <div class="scrim" id="scrim" style="display:none;"></div>
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main">
+    <div class="topbar" id="topbar"></div>
+    <div class="content">
+      <div class="panel">
+        <div style="display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+          <div style="position:relative;flex:1;min-width:200px;">
+            <i class="ti ti-search" style="position:absolute;left:12px;top:11px;color:var(--text-5);"></i>
+            <input type="text" id="search" placeholder="Search by name or document number" style="padding-left:34px;">
+          </div>
+          <select id="filter">
+            <option value="ALL">All risk levels</option>
+            <option value="VALID">Valid</option>
+            <option value="LOW">Low risk</option>
+            <option value="MEDIUM">Medium risk</option>
+            <option value="SUSPICIOUS">Suspicious</option>
+            <option value="HIGH">High risk</option>
+          </select>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Screening ID</th><th>Traveller</th><th>Document</th><th>Checkpoint</th><th>Officer</th><th>Date</th><th>Score</th><th>Decision</th>
+            </tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+renderChrome({ active: "history", title: "Screening history", subtitle: "All completed screenings across checkpoints" });
+
+function renderRows() {
+  const q = document.getElementById("search").value.toLowerCase();
+  const filter = document.getElementById("filter").value;
+  const rows = HISTORY.filter(h =>
+    (filter === "ALL" || h.riskKey === filter) &&
+    (h.name.toLowerCase().includes(q) || h.documentNumber.toLowerCase().includes(q))
+  );
+  document.getElementById("rows").innerHTML = rows.length ? rows.map(h => `
+    <tr>
+      <td><span class="mono-tag">${h.id}</span></td>
+      <td style="color:var(--text-2);">${h.name}</td>
+      <td style="color:var(--text-4);">${h.documentType}</td>
+      <td style="color:var(--text-4);">${h.checkpoint}</td>
+      <td style="color:var(--text-4);">${h.officer}</td>
+      <td style="color:var(--text-5);">${h.date}</td>
+      <td style="color:var(--text-3);">${h.score}</td>
+      <td>${riskBadge(h.riskKey,"sm")}</td>
+    </tr>`).join("") : `<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-5);white-space:normal;">No screenings match your search.</td></tr>`;
+}
+document.getElementById("search").addEventListener("input", renderRows);
+document.getElementById("filter").addEventListener("change", renderRows);
+renderRows();
+</script>
+</body>
+</html>

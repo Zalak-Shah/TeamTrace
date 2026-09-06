@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BorderShield AI — Identity Intelligence</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <div class="scrim" id="scrim" style="display:none;"></div>
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main">
+    <div class="topbar" id="topbar"></div>
+    <div class="content">
+
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="section-title">
+          <h3><i class="ti ti-affiliate"></i>Cross-identity network graph</h3>
+          <div style="display:flex;gap:14px;font-size:11.5px;">
+            <span style="color:var(--high);">&#9679; Biometric</span>
+            <span style="color:var(--cyan);">&#9679; Identity</span>
+            <span style="color:var(--indigo);">&#9679; Document</span>
+          </div>
+        </div>
+        <div style="font-size:12.5px;color:var(--text-4);margin-bottom:14px;">
+          Shared biometric hashes linking the same face to multiple declared identities and documents.
+        </div>
+        <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:10px;overflow-x:auto;">
+          <svg id="graph" viewBox="0 0 700 320" width="100%" height="360" style="min-width:560px;"></svg>
+        </div>
+        <div style="margin-top:14px;padding:12px;border-radius:9px;background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.3);font-size:12.5px;color:var(--high);">
+          Alert: biometric hash bh_9f21ac is linked to 3 distinct declared names and 4 travel documents across 2 checkpoints in the last 90 days.
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="section-title"><h3><i class="ti ti-users"></i>Linked identity records</h3></div>
+        <div id="identity-list"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+renderChrome({ active: "identity", title: "Identity intelligence", subtitle: "Cross-referencing faces, documents, and declared identities" });
+
+const colorFor = t => t === "face" ? "#F87171" : t === "person" ? "#22D3EE" : "#6366F1";
+const { nodes, edges } = IDENTITY_NETWORK;
+
+const linesHtml = edges.map(([a,b]) => {
+  const na = nodes.find(n=>n.id===a), nb = nodes.find(n=>n.id===b);
+  return `<line x1="${na.x}" y1="${na.y}" x2="${nb.x}" y2="${nb.y}" stroke="#263049" stroke-width="1.5"/>`;
+}).join("");
+
+const nodesHtml = nodes.map(n => {
+  const r = n.type === "face" ? 15 : 11;
+  return `<g>
+    <circle cx="${n.x}" cy="${n.y}" r="${r}" fill="#0D1220" stroke="${colorFor(n.type)}" stroke-width="2"/>
+    <text x="${n.x}" y="${n.y - r - 7}" text-anchor="middle" font-size="10.5" fill="#B7C0D3">${n.label}</text>
+  </g>`;
+}).join("");
+
+document.getElementById("graph").innerHTML = linesHtml + nodesHtml;
+
+document.getElementById("identity-list").innerHTML = nodes.filter(n => n.type === "person").map(n => `
+  <div style="display:flex;justify-content:space-between;padding:9px 4px;border-bottom:1px solid var(--border-2);font-size:12.5px;">
+    <span style="color:var(--text-2);">${n.label}</span>
+    <span style="color:var(--text-5);">${edges.filter(e => e.includes(n.id)).length} linked record(s)</span>
+  </div>`).join("");
+</script>
+</body>
+</html>
