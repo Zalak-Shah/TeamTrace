@@ -987,10 +987,6 @@ def health():
         "service": "BorderShield AI",
 
     }
-# ============================================================
-# TEMPORARY DEBUG - REMOVE AFTER FIXING
-# ============================================================
-
 @app.get("/api/debug-env")
 def debug_env():
 
@@ -1007,6 +1003,16 @@ def debug_env():
         "all_env_var_names_containing_ocr": [
             k for k in os.environ.keys() if "OCR" in k.upper()
         ],
+
+        "total_env_var_count": len(os.environ),
+
+        "vercel_env": os.getenv("VERCEL_ENV"),
+
+        "vercel_url": os.getenv("VERCEL_URL"),
+
+        "vercel_git_commit_ref": os.getenv("VERCEL_GIT_COMMIT_REF"),
+
+        "all_env_var_names_sorted": sorted(os.environ.keys()),
 
     }
 
