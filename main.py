@@ -1011,6 +1011,11 @@ def debug_env():
         "vercel_url": os.getenv("VERCEL_URL"),
 
         "vercel_git_commit_ref": os.getenv("VERCEL_GIT_COMMIT_REF"),
+        "vercel_project_name": os.getenv("VERCEL_PROJECT_NAME"),
+
+        "vercel_project_id": os.getenv("VERCEL_PROJECT_ID"),
+
+        "vercel_project_production_url": os.getenv("VERCEL_PROJECT_PRODUCTION_URL"),
 
         "all_env_var_names_sorted": sorted(os.environ.keys()),
 
