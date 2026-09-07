@@ -105,14 +105,41 @@ NAME_LABELS = (
     "name",
 )
 
+# Other field labels that can appear right after / merged with the name value.
+# We stop capturing as soon as one of these shows up, instead of swallowing
+# it into the name (this is what caused "S/W/D" to get merged into the name).
+NEXT_FIELD_LABELS = (
+    "s/w/d", "s/o", "w/o", "d/o", "c/o",
+    "dob", "date of birth",
+    "address", "bg", "blood group",
+    "licence no", "license no", "dl no",
+    "validity", "issue date", "date of issue",
+    "authorisation", "authorization",
+)
+
 VALUE_RE = re.compile(r"[A-Za-z][A-Za-z .'-]{1,49}")
+
+# Matches everything up to (but not including) the next field label, if present.
+_STOP_PATTERN = re.compile(
+    r"(.*?)(?:\b(?:" + "|".join(re.escape(lbl) for lbl in NEXT_FIELD_LABELS) + r")\b.*)?$",
+    re.IGNORECASE,
+)
+
+
+def _trim_to_next_field(value: str) -> str:
+    """Cuts off a captured value as soon as another field label appears in it."""
+    match = _STOP_PATTERN.match(value)
+    trimmed = match.group(1) if match else value
+    return trimmed.strip(" :-\t")
 
 
 def extract_name_from_labels(text: str) -> Optional[str]:
     """
     Looks for a line containing a name label (e.g. "Name:", "Given Name(s):")
     and extracts the value either after the colon on the same line,
-    or from the very next non-empty line.
+    or from the very next non-empty line. Stops capturing as soon as
+    another field label (S/W/D, DOB, Address, etc.) appears, so merged
+    OCR lines don't pull in the wrong text.
     """
 
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -130,6 +157,10 @@ def extract_name_from_labels(text: str) -> Optional[str]:
             if "authority" in lower or "department" in lower:
                 continue
 
+            # avoid accidentally matching the S/W/D line itself
+            if any(rel in lower for rel in ("s/w/d", "s/o", "w/o", "d/o", "c/o")):
+                continue
+
             # Try value on the same line, after the label
             after_label = re.sub(
                 rf".*\b{re.escape(label)}\b\s*[:\-]?\s*",
@@ -138,17 +169,17 @@ def extract_name_from_labels(text: str) -> Optional[str]:
                 flags=re.IGNORECASE,
             ).strip()
 
-            match = VALUE_RE.fullmatch(after_label)
+            after_label = _trim_to_next_field(after_label)
 
-            if match and len(after_label.split()) <= 5:
+            if after_label and VALUE_RE.fullmatch(after_label) and len(after_label.split()) <= 5:
                 return after_label
 
             # Otherwise, try the next line
             if index + 1 < len(lines):
 
-                next_line = lines[index + 1]
+                next_line = _trim_to_next_field(lines[index + 1])
 
-                if VALUE_RE.fullmatch(next_line) and len(next_line.split()) <= 5:
+                if next_line and VALUE_RE.fullmatch(next_line) and len(next_line.split()) <= 5:
                     return next_line
 
     return None
