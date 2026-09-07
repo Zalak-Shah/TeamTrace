@@ -987,7 +987,28 @@ def health():
         "service": "BorderShield AI",
 
     }
+# ============================================================
+# TEMPORARY DEBUG - REMOVE AFTER FIXING
+# ============================================================
 
+@app.get("/api/debug-env")
+def debug_env():
+
+    key = os.getenv("OCR_SPACE_API_KEY")
+
+    return {
+
+        "ocr_key_present": bool(key),
+
+        "ocr_key_length": len(key) if key else 0,
+
+        "ocr_key_preview": (key[:4] + "..." + key[-4:]) if key and len(key) > 8 else None,
+
+        "all_env_var_names_containing_ocr": [
+            k for k in os.environ.keys() if "OCR" in k.upper()
+        ],
+
+    }
 
 # ============================================================
 # SCREEN DOCUMENT
