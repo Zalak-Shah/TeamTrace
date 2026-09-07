@@ -987,39 +987,6 @@ def health():
         "service": "BorderShield AI",
 
     }
-@app.get("/api/debug-env")
-def debug_env():
-
-    key = os.getenv("OCR_SPACE_API_KEY")
-
-    return {
-
-        "ocr_key_present": bool(key),
-
-        "ocr_key_length": len(key) if key else 0,
-
-        "ocr_key_preview": (key[:4] + "..." + key[-4:]) if key and len(key) > 8 else None,
-
-        "all_env_var_names_containing_ocr": [
-            k for k in os.environ.keys() if "OCR" in k.upper()
-        ],
-
-        "total_env_var_count": len(os.environ),
-
-        "vercel_env": os.getenv("VERCEL_ENV"),
-
-        "vercel_url": os.getenv("VERCEL_URL"),
-
-        "vercel_git_commit_ref": os.getenv("VERCEL_GIT_COMMIT_REF"),
-        "vercel_project_name": os.getenv("VERCEL_PROJECT_NAME"),
-
-        "vercel_project_id": os.getenv("VERCEL_PROJECT_ID"),
-
-        "vercel_project_production_url": os.getenv("VERCEL_PROJECT_PRODUCTION_URL"),
-
-        "all_env_var_names_sorted": sorted(os.environ.keys()),
-
-    }
 
 # ============================================================
 # SCREEN DOCUMENT
