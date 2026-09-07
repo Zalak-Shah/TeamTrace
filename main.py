@@ -26,6 +26,7 @@ from database import (
     get_identity_intelligence,
     add_audit_log,
 )
+from name_extraction import guess_name
 
 
 # ============================================================
@@ -369,63 +370,6 @@ def extract_dates(text: str) -> list:
 # ============================================================
 # GUESS NAME
 # ============================================================
-
-def guess_name(text: str) -> Optional[str]:
-
-    skip_words = {
-
-        "GOVERNMENT",
-        "INDIA",
-        "REPUBLIC",
-        "INCOME",
-        "TAX",
-        "DEPARTMENT",
-        "UNIQUE",
-        "IDENTIFICATION",
-        "AUTHORITY",
-        "TRANSPORT",
-        "LICENCE",
-        "LICENSE",
-        "AADHAAR",
-        "PASSPORT",
-        "NATIONALITY",
-        "VISA",
-        "PERMIT",
-        "VALID",
-        "EXPIRY",
-        "SURNAME",
-        "GIVEN",
-        "NAME",
-
-    }
-
-
-    for line in text.splitlines():
-
-        clean = line.strip()
-
-        if not clean:
-            continue
-
-        if (
-            4 <= len(clean) <= 50
-            and re.fullmatch(
-                r"[A-Za-z][A-Za-z .'-]+",
-                clean,
-            )
-        ):
-
-            words = {
-                word.upper()
-                for word in clean.split()
-            }
-
-            if not (words & skip_words):
-
-                if len(words) <= 5:
-                    return clean
-
-    return None
 
 
 # ============================================================
