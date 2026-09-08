@@ -389,6 +389,127 @@ def extract_document_number(
 
 
 # ============================================================
+# MRZ EXTRACTION
+# ============================================================
+
+def extract_mrz(text: str) -> dict:
+    result = {
+        "detected": False,
+        "line1": None,
+        "line2": None,
+        "document_number": None,
+        "nationality": None,
+        "date_of_birth": None,
+        "sex": None,
+        "expiry_date": None,
+        "name": None,
+        "valid": False,
+    }
+
+    if not text:
+        return result
+
+    raw_lines = text.splitlines()
+    lines = []
+
+    for raw_line in raw_lines:
+        line = raw_line.upper().strip()
+
+        # OCR sometimes converts MRZ separators into spaces.
+        line = line.replace(" ", "<")
+        line = re.sub(r"[^A-Z0-9<]", "", line)
+
+        if len(line) >= 30:
+            lines.append(line)
+
+    # Standard passport MRZ (TD3) = two lines, normally 44 characters each.
+    for i in range(len(lines) - 1):
+        line1 = lines[i]
+        line2 = lines[i + 1]
+
+        if not line1.startswith("P<"):
+            continue
+
+        if len(line1) < 35 or len(line2) < 35:
+            continue
+
+        # Limit to the standard TD3 width.
+        line1 = line1[:44]
+        line2 = line2[:44]
+
+        result["detected"] = True
+        result["line1"] = line1
+        result["line2"] = line2
+
+        # Issuing state and name.
+        if len(line1) >= 5:
+            name_part = line1[5:]
+            parts = name_part.split("<<", 1)
+
+            if len(parts) == 2:
+                surname = parts[0].replace("<", " ").strip()
+                given = parts[1].replace("<", " ").strip()
+                result["name"] = f"{given} {surname}".strip()
+
+        # TD3 line 2:
+        # 0-8 passport number
+        # 9 check digit
+        # 10-12 nationality
+        # 13-18 DOB
+        # 19 check digit
+        # 20 sex
+        # 21-26 expiry
+        # 27 check digit
+        if len(line2) >= 27:
+            passport_number = line2[0:9].replace("<", "").strip()
+
+            if passport_number:
+                result["document_number"] = passport_number
+
+            nationality = line2[10:13].replace("<", "").strip()
+            if nationality:
+                result["nationality"] = nationality
+
+            dob_raw = line2[13:19]
+            if re.fullmatch(r"\d{6}", dob_raw):
+                yy = int(dob_raw[0:2])
+                mm = int(dob_raw[2:4])
+                dd = int(dob_raw[4:6])
+                year = 2000 + yy if yy <= 30 else 1900 + yy
+
+                try:
+                    result["date_of_birth"] = date(year, mm, dd).isoformat()
+                except ValueError:
+                    pass
+
+            sex = line2[20:21]
+            if sex in ("M", "F"):
+                result["sex"] = sex
+
+            expiry_raw = line2[21:27]
+            if re.fullmatch(r"\d{6}", expiry_raw):
+                yy = int(expiry_raw[0:2])
+                mm = int(expiry_raw[2:4])
+                dd = int(expiry_raw[4:6])
+                year = 2000 + yy if yy <= 30 else 1900 + yy
+
+                try:
+                    result["expiry_date"] = date(year, mm, dd).isoformat()
+                except ValueError:
+                    pass
+
+        result["valid"] = bool(
+            result["document_number"]
+            and result["date_of_birth"]
+            and result["expiry_date"]
+        )
+
+        return result
+
+    return result
+
+
+# ============================================================
 # VISUAL ANALYSIS
 # ============================================================
 
