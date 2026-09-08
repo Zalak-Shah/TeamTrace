@@ -491,7 +491,10 @@ def extract_mrz(text: str) -> dict:
                 yy = int(expiry_raw[0:2])
                 mm = int(expiry_raw[2:4])
                 dd = int(expiry_raw[4:6])
-                year = 2000 + yy if yy <= 30 else 1900 + yy
+
+                # MRZ passport expiry years are interpreted as 2000-2099.
+                # Example: 330125 = 25 January 2033.
+                year = 2000 + yy
 
                 try:
                     result["expiry_date"] = date(year, mm, dd).isoformat()
@@ -1277,7 +1280,7 @@ async def screen_document(
 
         ocr_confidence,
 
-    mrz,
+        mrz,
     )
 
 
