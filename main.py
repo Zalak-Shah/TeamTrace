@@ -120,13 +120,8 @@ AADHAAR_NUMBER_RE = re.compile(
     r"\b\d{4}\s?\d{4}\s?\d{4}\b"
 )
 
-PAN_NUMBER_RE = re.compile(
-    r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
-    re.IGNORECASE,
-)
-
 PASSPORT_NUMBER_RE = re.compile(
-    r"\b[A-Z][0-9]{7}\b",
+    r"\b[A-Z]{1,2}\s?\d{6,8}\b",
     re.IGNORECASE,
 )
 
@@ -135,14 +130,33 @@ DL_NUMBER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Supports:
+# 23/04/1984
+# 23-04-1984
+# 1984-04-23
+# 23 APR 1984
+# 23 APR/AVR 1984
+# 25 STY/JAN 2033
 DATE_RE = re.compile(
-    r"\b("
-    r"\d{2}[/-]\d{2}[/-]\d{4}"
-    r"|"
-    r"\d{4}[/-]\d{2}[/-]\d{2}"
-    r")\b"
+    r"""
+    \b(
+        \d{2}[/-]\d{2}[/-]\d{4}
+        |
+        \d{4}[/-]\d{2}[/-]\d{2}
+        |
+        \d{1,2}\s+
+        (?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)
+        \s+\d{4}
+        |
+        \d{1,2}\s+
+        (?:STY|LUT|MAR|KWI|MAJ|CZE|LIP|SIE|WRZ|PAZ|PAŹ|LIS|GRU)
+        (?:\s*/\s*)?
+        (?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)?
+        \s+\d{4}
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
-
 
 # ============================================================
 # DOCUMENT KEYWORDS
