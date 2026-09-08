@@ -120,6 +120,11 @@ AADHAAR_NUMBER_RE = re.compile(
     r"\b\d{4}\s?\d{4}\s?\d{4}\b"
 )
 
+PAN_NUMBER_RE = re.compile(
+    r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
+    re.IGNORECASE,
+)
+
 PASSPORT_NUMBER_RE = re.compile(
     r"\b[A-Z]{1,2}\s?\d{6,8}\b",
     re.IGNORECASE,
@@ -179,13 +184,15 @@ KEYWORDS = {
 
     "Passport": [
         "passport",
-        "republic of india",
         "nationality",
         "surname",
         "given name",
         "place of birth",
+        "date of birth",
         "date of issue",
         "date of expiry",
+        "type",
+        "sex",
     ],
 
     "Visa": [
@@ -228,30 +235,67 @@ KEYWORDS = {
 # DATE HELPER
 # ============================================================
 
-def to_date(value: Optional[str]) -> Optional[date]:
+MONTHS = {
+    "JAN": 1, "STY": 1,
+    "FEB": 2, "LUT": 2,
+    "MAR": 3,
+    "APR": 4, "KWI": 4,
+    "MAY": 5, "MAJ": 5,
+    "JUN": 6, "CZE": 6,
+    "JUL": 7, "LIP": 7,
+    "AUG": 8, "SIE": 8,
+    "SEP": 9, "WRZ": 9,
+    "OCT": 10, "PAZ": 10, "PAŹ": 10,
+    "NOV": 11, "LIS": 11,
+    "DEC": 12, "GRU": 12,
+}
 
+
+def to_date(value: Optional[str]) -> Optional[date]:
     if not value:
         return None
 
-    formats = [
-        "%d/%m/%Y",
-        "%d-%m-%Y",
-        "%Y-%m-%d",
-        "%Y/%m/%d",
-    ]
+    value = value.strip().upper()
+    value = re.sub(r"\s+", " ", value)
 
-    for fmt in formats:
-
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%Y/%m/%d"):
         try:
-            return datetime.strptime(
-                value,
-                fmt,
-            ).date()
-
+            return datetime.strptime(value, fmt).date()
         except ValueError:
-            continue
+            pass
+
+    match = re.fullmatch(
+        r"(\d{1,2})\s+([A-ZĄĆĘŁŃÓŚŹŻ]{3,5})(?:\s*/\s*[A-Z]{3})?\s+(\d{4})",
+        value,
+    )
+
+    if match:
+        day = int(match.group(1))
+        month = MONTHS.get(match.group(2).upper())
+        year = int(match.group(3))
+
+        if month:
+            try:
+                return date(year, month, day)
+            except ValueError:
+                return None
 
     return None
+
+
+def extract_dates(text: str) -> list:
+    if not text:
+        return []
+
+    matches = DATE_RE.findall(text)
+    result = []
+
+    for value in matches:
+        value = value.strip()
+        if value and value not in result:
+            result.append(value)
+
+    return result
 
 
 # ============================================================
@@ -259,70 +303,46 @@ def to_date(value: Optional[str]) -> Optional[date]:
 # ============================================================
 
 def classify_document(text: str) -> str:
-
+    text = text or ""
     lower = text.lower()
-
+    upper = text.upper()
     scores = {}
 
     for doc_type, keywords in KEYWORDS.items():
+        scores[doc_type] = sum(
+            1 for keyword in keywords
+            if keyword.lower() in lower
+        )
 
-        score = 0
-
-        for keyword in keywords:
-
-            if keyword in lower:
-                score += 1
-
-        scores[doc_type] = score
-
-
-    if (
-        AADHAAR_NUMBER_RE.search(text)
-        and scores.get("Aadhaar", 0) > 0
-    ):
+    if AADHAAR_NUMBER_RE.search(text) and scores.get("Aadhaar", 0) > 0:
         return "Aadhaar"
 
-
     if PAN_NUMBER_RE.search(text):
-
-        if (
-            scores.get("PAN Card", 0) > 0
-            or "income tax" in lower
-        ):
+        if scores.get("PAN Card", 0) > 0 or "income tax" in lower:
             return "PAN Card"
 
-
-    if (
-        PASSPORT_NUMBER_RE.search(text)
-        and scores.get("Passport", 0) >= 2
-    ):
+    if "P<" in upper or re.search(r"\bP<[A-Z]{3}", upper):
         return "Passport"
 
+    if PASSPORT_NUMBER_RE.search(text) and scores.get("Passport", 0) >= 1:
+        return "Passport"
+
+    if scores.get("Passport", 0) >= 2:
+        return "Passport"
 
     if scores.get("Visa", 0) >= 2:
         return "Visa"
 
-
-    if (
-        DL_NUMBER_RE.search(text)
-        and scores.get("Driving Licence", 0) > 0
-    ):
+    if DL_NUMBER_RE.search(text) and scores.get("Driving Licence", 0) > 0:
         return "Driving Licence"
-
 
     if scores.get("National ID", 0) >= 1:
         return "National ID"
 
-
     if scores.get("Permit", 0) >= 2:
         return "Permit"
 
-
-    best = max(
-        scores,
-        key=scores.get,
-    )
-
+    best = max(scores, key=scores.get)
     if scores[best] > 0:
         return best
 
@@ -338,52 +358,34 @@ def extract_document_number(
     doc_type: str,
 ) -> Optional[str]:
 
+    text = text or ""
+
     if doc_type == "Aadhaar":
-
         match = AADHAAR_NUMBER_RE.search(text)
-
         if match:
             return match.group(0).replace(" ", "")
 
-
     elif doc_type == "PAN Card":
-
         match = PAN_NUMBER_RE.search(text)
-
         if match:
             return match.group(0).upper()
-
 
     elif doc_type == "Passport":
-
         match = PASSPORT_NUMBER_RE.search(text)
-
         if match:
-            return match.group(0).upper()
+            return re.sub(r"\s+", "", match.group(0).upper())
 
+        normalized = re.sub(r"(?<=[A-Z])\s+(?=\d)", "", text.upper())
+        match = PASSPORT_NUMBER_RE.search(normalized)
+        if match:
+            return re.sub(r"\s+", "", match.group(0).upper())
 
     elif doc_type == "Driving Licence":
-
         match = DL_NUMBER_RE.search(text)
-
         if match:
-            return match.group(0).upper()
-
+            return re.sub(r"\s+", "", match.group(0).upper())
 
     return None
-
-
-# ============================================================
-# EXTRACT DATES
-# ============================================================
-
-def extract_dates(text: str) -> list:
-    return DATE_RE.findall(text)
-
-
-# ============================================================
-# GUESS NAME
-# ============================================================
 
 
 # ============================================================
@@ -576,223 +578,188 @@ def run_validation(
     doc_type: str,
     text: str,
     ocr_confidence: float,
+    mrz: Optional[dict] = None,
 ):
-
     issues = []
     verified = []
     score = 0
-
+    mrz = mrz or {}
 
     # NAME
-
     name = guess_name(text)
 
-    if name:
-
-        verified.append(
-            "A likely name was detected"
-        )
-
+    if doc_type == "Passport" and mrz.get("name"):
+        name = mrz["name"]
+        verified.append("Passport name detected from MRZ")
+    elif name:
+        verified.append("Name information was detected")
     else:
-
         issues.append({
-
-            "title": "Required field missing",
-
-            "severity": severity_for_weight(
-                WEIGHTS["MISSING_REQUIRED_FIELD"]
-            ),
-
-            "description":
-                "Could not locate a likely name on the document.",
-
+            "title": "Name not detected",
+            "severity": "MEDIUM",
+            "description": "The OCR could not confidently locate the document name.",
         })
-
-        score += WEIGHTS[
-            "MISSING_REQUIRED_FIELD"
-        ]
-
+        score += WEIGHTS["MISSING_REQUIRED_FIELD"]
 
     # DOCUMENT NUMBER
+    doc_number = extract_document_number(text, doc_type)
 
-    doc_number = extract_document_number(
-        text,
-        doc_type,
-    )
-
+    if (
+        not doc_number
+        and doc_type == "Passport"
+        and mrz.get("document_number")
+    ):
+        doc_number = mrz["document_number"]
+        verified.append("Passport number recovered from MRZ")
 
     if doc_number:
-
-        verified.append(
-            f"{doc_type} number format looks valid"
-        )
-
-    elif doc_type in (
-
-        "Aadhaar",
-        "PAN Card",
-        "Passport",
-        "Driving Licence",
-
-    ):
-
+        verified.append(f"{doc_type} number format looks valid")
+    elif doc_type in ("Aadhaar", "PAN Card", "Passport", "Driving Licence"):
         issues.append({
-
-            "title":
-                "Invalid or missing document number",
-
-            "severity":
-                severity_for_weight(
-                    WEIGHTS["INVALID_NUMBER_FORMAT"]
-                ),
-
-            "description":
-                f"No valid {doc_type} number pattern was found.",
-
+            "title": "Document number not detected",
+            "severity": severity_for_weight(WEIGHTS["INVALID_NUMBER_FORMAT"]),
+            "description": f"No valid {doc_type} number could be extracted from the document.",
         })
-
-        score += WEIGHTS[
-            "INVALID_NUMBER_FORMAT"
-        ]
-
+        score += WEIGHTS["INVALID_NUMBER_FORMAT"]
 
     # DATES
-
     dates_found = extract_dates(text)
+    parsed_dates = []
 
-    if not dates_found:
+    for value in dates_found:
+        parsed = to_date(value)
+        if parsed:
+            parsed_dates.append(parsed)
 
+    if doc_type == "Passport":
+        for mrz_key in ("date_of_birth", "expiry_date"):
+            if mrz.get(mrz_key):
+                try:
+                    parsed_dates.append(date.fromisoformat(mrz[mrz_key]))
+                except (ValueError, TypeError):
+                    pass
+
+    parsed_dates = list(dict.fromkeys(parsed_dates))
+
+    if parsed_dates:
+        verified.append(f"{len(parsed_dates)} valid date(s) extracted")
+    elif doc_type in ("Passport", "Visa", "Driving Licence", "Permit"):
         issues.append({
-
-            "title": "Required field missing",
-
-            "severity":
-                severity_for_weight(
-                    WEIGHTS["MISSING_REQUIRED_FIELD"]
-                ),
-
-            "description":
-                "No date could be extracted from the document.",
-
+            "title": "Date could not be verified",
+            "severity": "MEDIUM",
+            "description": "No supported date format could be confidently converted to a calendar date.",
         })
+        score += WEIGHTS["MISSING_REQUIRED_FIELD"]
 
-        score += WEIGHTS[
-            "MISSING_REQUIRED_FIELD"
-        ]
+    # PASSPORT EXPIRY
+    if doc_type == "Passport":
+        expiry_candidate = None
 
-    else:
+        if mrz.get("expiry_date"):
+            try:
+                expiry_candidate = date.fromisoformat(mrz["expiry_date"])
+            except (ValueError, TypeError):
+                pass
 
-        verified.append(
-            "Date information was extracted"
-        )
+        if expiry_candidate is None and parsed_dates:
+            expiry_candidate = max(parsed_dates)
 
+        if expiry_candidate:
+            if expiry_candidate < date.today():
+                issues.append({
+                    "title": "Passport appears expired",
+                    "severity": "HIGH",
+                    "description": f"Detected expiry date {expiry_candidate.isoformat()} is earlier than today's date.",
+                })
+                score += WEIGHTS["EXPIRED_DOCUMENT"]
+            else:
+                verified.append(
+                    f"Passport expiry date {expiry_candidate.isoformat()} is valid"
+                )
 
-        if doc_type in (
+    # OTHER DOCUMENT EXPIRY
+    elif doc_type in ("Visa", "Driving Licence", "Permit") and parsed_dates:
+        expiry_candidate = max(parsed_dates)
 
-            "Passport",
-            "Visa",
-            "Driving Licence",
-            "Permit",
+        if expiry_candidate < date.today():
+            issues.append({
+                "title": "Document may be expired",
+                "severity": "MEDIUM",
+                "description": f"Latest detected date {expiry_candidate.isoformat()} is earlier than today's date.",
+            })
+            score += WEIGHTS["EXPIRED_DOCUMENT"]
+        else:
+            verified.append("Latest detected validity date is not expired")
 
-        ):
+    # MRZ VALIDATION
+    if doc_type == "Passport":
+        if mrz.get("detected"):
+            verified.append("Passport MRZ detected")
 
-            parsed_dates = []
+            mrz_number = mrz.get("document_number")
 
-            for value in dates_found:
+            if doc_number and mrz_number:
+                visible_normalized = re.sub(r"[^A-Z0-9]", "", doc_number.upper())
+                mrz_normalized = re.sub(r"[^A-Z0-9]", "", mrz_number.upper())
 
-                parsed = to_date(value)
-
-                if parsed:
-                    parsed_dates.append(parsed)
-
-
-            if parsed_dates:
-
-                latest_date = max(parsed_dates)
-
-                if latest_date < date.today():
-
-                    issues.append({
-
-                        "title":
-                            "Possible expired document",
-
-                        "severity":
-                            "MEDIUM",
-
-                        "description":
-                            "The latest detected date appears to have expired.",
-
-                    })
-
-                    score += WEIGHTS[
-                        "EXPIRED_DOCUMENT"
-                    ]
-
+                if visible_normalized == mrz_normalized:
+                    verified.append("Passport number matches MRZ")
                 else:
+                    issues.append({
+                        "title": "MRZ passport number mismatch",
+                        "severity": "HIGH",
+                        "description": (
+                            f"Visible passport number '{visible_normalized}' "
+                            f"does not match MRZ '{mrz_normalized}'."
+                        ),
+                    })
+                    score += WEIGHTS["CRITICAL_MISMATCH"]
 
-                    verified.append(
-                        "Latest detected date is not expired"
-                    )
+            mrz_expiry = mrz.get("expiry_date")
 
+            if mrz_expiry:
+                try:
+                    mrz_expiry_date = date.fromisoformat(mrz_expiry)
+
+                    if mrz_expiry_date < date.today():
+                        issues.append({
+                            "title": "MRZ indicates expired passport",
+                            "severity": "HIGH",
+                            "description": f"MRZ expiry date is {mrz_expiry}.",
+                        })
+                        score += WEIGHTS["EXPIRED_DOCUMENT"]
+                    else:
+                        verified.append("MRZ expiry date is valid")
+                except ValueError:
+                    issues.append({
+                        "title": "Invalid MRZ expiry date",
+                        "severity": "MEDIUM",
+                        "description": "The passport MRZ was detected but its expiry date could not be parsed.",
+                    })
+        else:
+            verified.append("MRZ not detected; visible passport fields used")
 
     # OCR CONFIDENCE
-
     if ocr_confidence < 0.60:
-
         issues.append({
-
-            "title":
-                "Low OCR confidence",
-
-            "severity":
-                "MEDIUM",
-
-            "description":
-                "OCR quality appears low.",
-
+            "title": "Low OCR confidence",
+            "severity": "MEDIUM",
+            "description": "OCR quality appears low. Manual verification is recommended.",
         })
-
-        score += WEIGHTS[
-            "LOW_OCR_CONFIDENCE"
-        ]
-
+        score += WEIGHTS["LOW_OCR_CONFIDENCE"]
     else:
-
-        verified.append(
-            "OCR extraction completed successfully"
-        )
-
+        verified.append("OCR extraction completed successfully")
 
     # UNKNOWN DOCUMENT
-
     if doc_type == "Unknown":
-
         issues.append({
-
-            "title":
-                "Document type could not be identified",
-
-            "severity":
-                "HIGH",
-
-            "description":
-                "No supported document pattern was confidently detected.",
-
+            "title": "Document type could not be identified",
+            "severity": "HIGH",
+            "description": "No supported document pattern was confidently detected.",
         })
+        score += WEIGHTS["CRITICAL_MISMATCH"]
 
-        score += WEIGHTS[
-            "CRITICAL_MISMATCH"
-        ]
-
-
-    return (
-        issues,
-        verified,
-        score,
-        name,
-        doc_number,
-    )
+    return issues, verified, score, name, doc_number
 
 
 # ============================================================
@@ -1115,6 +1082,8 @@ async def screen_document(
     # DOCUMENT TYPE
 
     doc_type = classify_document(text)
+    # Passport MRZ extraction
+    mrz = extract_mrz(text)
 
 
     # NORMALIZATION
@@ -1187,6 +1156,7 @@ async def screen_document(
 
         ocr_confidence,
 
+    mrz,
     )
 
 
@@ -1432,6 +1402,8 @@ async def screen_document(
 
             "dates_found":
                 extract_dates(text),
+
+            "mrz": mrz,
 
         },
 
