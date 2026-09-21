@@ -3115,7 +3115,7 @@ async def screen_document(
             "permit",
 
         "aadhaar":
-            "aadhaar",
+            "national id",
 
         "pan card":
             "pan card",
@@ -3249,10 +3249,19 @@ async def screen_document(
 
     else:
 
-        verified.append(
-            "Correct document type confirmed: "
-            f"{expected_document_type}"
-        )
+        if doc_type == "Aadhaar":
+
+            verified.append(
+                "Correct document type confirmed: "
+                "National ID (Aadhaar Card - India)"
+            )
+
+        else:
+
+            verified.append(
+                "Correct document type confirmed: "
+                f"{expected_document_type}"
+            )
 
     # ========================================================
     # VISUAL ISSUES
