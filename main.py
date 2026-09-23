@@ -41,6 +41,8 @@ from database import (
     save_screening,
     get_identity_intelligence,
     add_audit_log,
+    get_audit_chain,
+    verify_audit_chain,
 )
 
 from name_extraction import guess_name
@@ -3428,6 +3430,8 @@ async def screen_document(
                 f"Status: "
                 f"{status}"
             ),
+
+            screening_id=screening_id,
         )
 
     except Exception as error:
@@ -3791,6 +3795,58 @@ def get_dashboard():
     finally:
 
         conn.close()
+
+
+# ============================================================
+# AUDIT CHAIN API (blockchain-style hash chain)
+# ============================================================
+
+@app.get("/api/audit")
+def audit_log_api(limit: int = 50):
+
+    try:
+
+        logs = get_audit_chain(limit)
+
+        return {
+
+            "success": True,
+
+            "audit_logs": logs,
+        }
+
+    except Exception as error:
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail=str(error),
+        )
+
+
+@app.get("/api/audit/verify")
+def audit_verify_api():
+
+    try:
+
+        result = verify_audit_chain()
+
+        return {
+
+            "success": True,
+
+            **result,
+        }
+
+    except Exception as error:
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail=str(error),
+        )
 
 
 # ============================================================
