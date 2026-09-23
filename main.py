@@ -2986,7 +2986,7 @@ async def screen_document(
                 issues=issues,
 
                 checkpoint=(
-                    "Main Border Checkpoint"
+                    "SSB Border Outpost - Raxaul"
                 ),
 
                 officer_name=(
@@ -3384,7 +3384,7 @@ async def screen_document(
             issues=issues,
 
             checkpoint=(
-                "Main Border Checkpoint"
+                "SSB Border Outpost - Raxaul"
             ),
 
             officer_name=(
