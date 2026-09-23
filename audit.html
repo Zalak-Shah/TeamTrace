@@ -128,11 +128,17 @@ input:focus,select:focus{border-color:var(--cyan)!important;}
     <div class="topbar" id="topbar"></div>
     <div class="content">
       <div class="panel">
-        <div class="section-title"><h3><i class="ti ti-file-clock"></i>Immutable audit chain</h3></div>
-        <div style="font-size:12.5px;color:var(--text-4);margin-bottom:16px;">
-          Each screening event is hash-chained to the previous entry to prevent tampering with decision records.
+        <div class="section-title">
+          <h3><i class="ti ti-file-clock"></i>Immutable audit chain</h3>
+          <button class="ghost-link" id="verifyBtn" onclick="verifyChain()">
+            <i class="ti ti-shield-check"></i>Verify chain integrity
+          </button>
         </div>
-        <div id="chain"></div>
+        <div style="font-size:12.5px;color:var(--text-4);margin-bottom:10px;">
+          Each screening event is SHA-256 hash-chained to the previous entry, so any edit to a past record is mathematically detectable.
+        </div>
+        <div id="verifyResult" style="margin-bottom:14px;"></div>
+        <div id="chain">Loading audit chain…</div>
       </div>
     </div>
   </div>
@@ -261,14 +267,10 @@ const FRAUD_CASES = [
   { id: "FC-2170", title: "MRZ checksum fraud, forged student visa batch", riskKey: "HIGH", status: "Resolved", linked: 9, checkpoint: "IGI Airport T3", opened: "2026-08-20" },
 ];
 
-const AUDIT_LOGS = [
-  { id: "AL-99231", event: "SCR-4821", hash: "8f2a...c193", prev: "d4e1...771a", time: "2026-09-05 06:12:03", action: "Screening completed — VALID" },
-  { id: "AL-99230", event: "SCR-4820", hash: "d4e1...771a", prev: "22b0...5f9c", time: "2026-09-05 05:47:51", action: "Screening completed — VALID" },
-  { id: "AL-99229", event: "SCR-4819", hash: "22b0...5f9c", prev: "aa71...20e4", time: "2026-09-04 22:03:18", action: "Screening completed — MEDIUM RISK" },
-  { id: "AL-99228", event: "SCR-4818", hash: "aa71...20e4", prev: "0c3f...889b", time: "2026-09-04 19:38:44", action: "Screening completed — VALID" },
-  { id: "AL-99227", event: "SCR-4817", hash: "0c3f...889b", prev: "5591...0a2d", time: "2026-09-04 15:21:09", action: "Screening completed — SUSPICIOUS" },
-  { id: "AL-99226", event: "SCR-4816", hash: "5591...0a2d", prev: "genesis", time: "2026-09-03 11:05:37", action: "Screening completed — HIGH RISK" },
-];
+// Real audit chain is fetched from the backend below (see script at
+// the bottom of this file) - this is no longer mock data.
+const API_BASE = "https://teamtrace-backend.vercel.app/api";
+let AUDIT_LOGS = [];
 
 const HISTORY = [
   { id: "SCR-4827", name: "Ananya Verma", documentType: "Passport", checkpoint: "IGI Airport T3", officer: "R. Sharma", date: "2026-09-05 06:12", riskKey: "VALID", score: 6, documentNumber: "P8827341" },
@@ -341,24 +343,66 @@ const STEPS = [
 <script>
 renderChrome({ active: "audit", title: "Audit logs", subtitle: "Tamper-evident record of every screening decision" });
 
-document.getElementById("chain").innerHTML = AUDIT_LOGS.map((a,i) => `
-  <div style="display:flex;gap:14px;padding:12px 4px;border-bottom:${i<AUDIT_LOGS.length-1?"1px solid var(--border-2)":"none"};">
-    <div style="display:flex;flex-direction:column;align-items:center;">
-      <div style="width:8px;height:8px;border-radius:999px;background:var(--cyan);margin-top:5px;"></div>
-      ${i<AUDIT_LOGS.length-1?'<div style="width:1px;flex:1;background:var(--border-3);margin-top:4px;"></div>':""}
-    </div>
-    <div style="flex:1;padding-bottom:4px;">
-      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;">
-        <span style="font-size:13px;color:var(--text-2);font-weight:500;">${a.action}</span>
-        <span style="font-size:11.5px;color:var(--text-5);">${a.time}</span>
+function shortHash(h) {
+  if (!h) return "—";
+  return h.length > 16 ? `${h.slice(0,8)}...${h.slice(-6)}` : h;
+}
+
+function renderChain(logs) {
+  if (!logs.length) {
+    document.getElementById("chain").innerHTML =
+      `<div style="font-size:13px;color:var(--text-4);padding:16px 4px;">No screenings recorded yet. Run a document screening to start the chain.</div>`;
+    return;
+  }
+  document.getElementById("chain").innerHTML = logs.map((a,i) => `
+    <div style="display:flex;gap:14px;padding:12px 4px;border-bottom:${i<logs.length-1?"1px solid var(--border-2)":"none"};">
+      <div style="display:flex;flex-direction:column;align-items:center;">
+        <div style="width:8px;height:8px;border-radius:999px;background:var(--cyan);margin-top:5px;"></div>
+        ${i<logs.length-1?'<div style="width:1px;flex:1;background:var(--border-3);margin-top:4px;"></div>':""}
       </div>
-      <div style="font-size:11.5px;color:var(--text-5);margin-top:4px;">Event <span class="mono-tag">${a.event}</span></div>
-      <div style="display:flex;gap:16px;margin-top:6px;flex-wrap:wrap;">
-        <span style="font-size:11px;color:var(--text-5);">Hash <span class="mono-tag">${a.hash}</span></span>
-        <span style="font-size:11px;color:var(--text-5);">Prev <span class="mono-tag">${a.prev}</span></span>
+      <div style="flex:1;padding-bottom:4px;">
+        <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;">
+          <span style="font-size:13px;color:var(--text-2);font-weight:500;">${a.action}</span>
+          <span style="font-size:11.5px;color:var(--text-5);">${a.created_at ? a.created_at.replace("T"," ").slice(0,19) : ""}</span>
+        </div>
+        <div style="font-size:11.5px;color:var(--text-5);margin-top:4px;">${a.details || ""}</div>
+        <div style="display:flex;gap:16px;margin-top:6px;flex-wrap:wrap;">
+          <span style="font-size:11px;color:var(--text-5);">Hash <span class="mono-tag">${shortHash(a.hash)}</span></span>
+          <span style="font-size:11px;color:var(--text-5);">Prev <span class="mono-tag">${shortHash(a.prev_hash)}</span></span>
+        </div>
       </div>
-    </div>
-  </div>`).join("");
+    </div>`).join("");
+}
+
+async function loadChain() {
+  try {
+    const res = await fetch(`${API_BASE}/audit?limit=50`);
+    const data = await res.json();
+    AUDIT_LOGS = data.audit_logs || [];
+    renderChain(AUDIT_LOGS);
+  } catch (err) {
+    document.getElementById("chain").innerHTML =
+      `<div style="font-size:13px;color:var(--high);padding:16px 4px;">Could not reach the audit API: ${err}</div>`;
+  }
+}
+
+async function verifyChain() {
+  const resultEl = document.getElementById("verifyResult");
+  resultEl.innerHTML = `<span style="font-size:12.5px;color:var(--text-4);">Verifying chain…</span>`;
+  try {
+    const res = await fetch(`${API_BASE}/audit/verify`);
+    const data = await res.json();
+    if (data.valid) {
+      resultEl.innerHTML = `<span class="badge valid"><span class="badge-dot"></span>CHAIN INTACT — ${data.total_blocks} block(s) verified, no tampering detected</span>`;
+    } else {
+      resultEl.innerHTML = `<span class="badge high"><span class="badge-dot"></span>TAMPERING DETECTED at block id(s): ${data.broken_blocks.join(", ")}</span>`;
+    }
+  } catch (err) {
+    resultEl.innerHTML = `<span style="font-size:12.5px;color:var(--high);">Verification failed: ${err}</span>`;
+  }
+}
+
+loadChain();
 </script>
 </body>
 </html>
