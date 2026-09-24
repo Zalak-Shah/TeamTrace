@@ -1,7 +1,10 @@
-import sqlite3
+import os
 import json
 import hashlib
 from datetime import datetime
+
+import psycopg2
+import psycopg2.extras
 
 # ============================================================
 # BLOCKCHAIN-STYLE HASH CHAIN
@@ -28,17 +31,33 @@ def compute_block_hash(prev_hash, officer_name, action, details, created_at, scr
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-DB_NAME = "/tmp/bordershield.db"
+# ============================================================
+# DATABASE CONNECTION (Postgres / Neon)
+# ============================================================
+# DATABASE_URL comes from an environment variable - never hardcode
+# a connection string. Locally, put it in a .env file (already
+# loaded by main.py's load_dotenv()). On Vercel, set it under
+# Project Settings -> Environment Variables. Neon's connection
+# string already includes ?sslmode=require, so no extra SSL setup
+# is needed here.
+# ============================================================
 
-# ============================================================
-# DATABASE CONNECTION
-# ============================================================
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 
 def get_connection():
 
-    conn = sqlite3.connect(DB_NAME)
+    if not DATABASE_URL:
 
-    conn.row_factory = sqlite3.Row
+        raise RuntimeError(
+            "DATABASE_URL is not set. Add your Neon connection string "
+            "to .env locally, and to Vercel's Environment Variables in production."
+        )
+
+    conn = psycopg2.connect(
+        DATABASE_URL,
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    )
 
     return conn
 
@@ -61,7 +80,7 @@ def initialize_database():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS identities (
 
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
 
         full_name TEXT,
 
@@ -90,7 +109,7 @@ def initialize_database():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS screenings (
 
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
 
         identity_id INTEGER,
 
@@ -126,7 +145,7 @@ def initialize_database():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS fraud_cases (
 
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
 
         identity_id INTEGER,
 
@@ -156,7 +175,7 @@ def initialize_database():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS checkpoints (
 
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
 
         checkpoint_name TEXT,
 
@@ -177,7 +196,7 @@ def initialize_database():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS audit_logs (
 
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
 
         officer_name TEXT,
 
@@ -201,10 +220,13 @@ def initialize_database():
     # existed before the hash-chain feature was introduced.
     # --------------------------------------------------------
 
-    existing_columns = {
-        row["name"]
-        for row in cursor.execute("PRAGMA table_info(audit_logs)").fetchall()
-    }
+    cursor.execute("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'audit_logs'
+    """)
+
+    existing_columns = {row["column_name"] for row in cursor.fetchall()}
 
     for column, col_type in (
         ("screening_id", "INTEGER"),
@@ -221,9 +243,11 @@ def initialize_database():
 
     conn.commit()
 
+    cursor.close()
+
     conn.close()
 
-    print("BorderShield database initialized successfully.")
+    print("BorderShield database (Postgres) initialized successfully.")
 
 
 # ============================================================
@@ -263,7 +287,7 @@ def create_or_get_identity(
 
         FROM identities
 
-        WHERE document_number = ?
+        WHERE document_number = %s
 
     """, (document_number,))
 
@@ -274,6 +298,8 @@ def create_or_get_identity(
     if existing:
 
         identity_id = existing["id"]
+
+        cursor.close()
 
         conn.close()
 
@@ -299,7 +325,9 @@ def create_or_get_identity(
 
         )
 
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
+
+        RETURNING id
 
     """, (
 
@@ -314,10 +342,12 @@ def create_or_get_identity(
     ))
 
 
-    identity_id = cursor.lastrowid
+    identity_id = cursor.fetchone()["id"]
 
 
     conn.commit()
+
+    cursor.close()
 
     conn.close()
 
@@ -345,7 +375,7 @@ def save_screening(
 
     issues=None,
 
-    checkpoint="Main Border Checkpoint",
+    checkpoint="SSB Border Outpost - Raxaul",
 
     officer_name="BorderShield AI"
 
@@ -394,7 +424,9 @@ def save_screening(
 
         )
 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+
+        RETURNING id
 
     """, (
 
@@ -421,10 +453,12 @@ def save_screening(
     ))
 
 
-    screening_id = cursor.lastrowid
+    screening_id = cursor.fetchone()["id"]
 
 
     conn.commit()
+
+    cursor.close()
 
     conn.close()
 
@@ -457,7 +491,7 @@ def get_identity_intelligence(identity_id):
 
         FROM identities
 
-        WHERE id = ?
+        WHERE id = %s
 
     """, (identity_id,))
 
@@ -466,6 +500,8 @@ def get_identity_intelligence(identity_id):
 
 
     if not identity:
+
+        cursor.close()
 
         conn.close()
 
@@ -488,7 +524,7 @@ def get_identity_intelligence(identity_id):
 
         FROM screenings
 
-        WHERE identity_id = ?
+        WHERE identity_id = %s
 
         ORDER BY created_at DESC
 
@@ -514,7 +550,7 @@ def get_identity_intelligence(identity_id):
 
         FROM fraud_cases
 
-        WHERE identity_id = ?
+        WHERE identity_id = %s
 
         ORDER BY created_at DESC
 
@@ -529,6 +565,8 @@ def get_identity_intelligence(identity_id):
 
     ]
 
+
+    cursor.close()
 
     conn.close()
 
@@ -718,7 +756,9 @@ def add_audit_log(
 
         )
 
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+
+        RETURNING id
 
     """, (
 
@@ -738,10 +778,12 @@ def add_audit_log(
     ))
 
 
-    log_id = cursor.lastrowid
+    log_id = cursor.fetchone()["id"]
 
 
     conn.commit()
+
+    cursor.close()
 
     conn.close()
 
@@ -766,7 +808,7 @@ def get_audit_chain(limit=100):
 
         ORDER BY id DESC
 
-        LIMIT ?
+        LIMIT %s
 
     """, (limit,))
 
@@ -774,6 +816,8 @@ def get_audit_chain(limit=100):
         dict(row)
         for row in cursor.fetchall()
     ]
+
+    cursor.close()
 
     conn.close()
 
@@ -810,6 +854,8 @@ def verify_audit_chain():
         dict(row)
         for row in cursor.fetchall()
     ]
+
+    cursor.close()
 
     conn.close()
 
@@ -948,6 +994,8 @@ def get_dashboard_data():
     ]
 
 
+    cursor.close()
+
     conn.close()
 
 
@@ -959,7 +1007,7 @@ def get_dashboard_data():
 
             "screenings_today": total_screenings,
 
-            "average_risk_score": round(average, 1) if average else 0,
+            "average_risk_score": round(float(average), 1) if average else 0,
 
             "cleared_documents": cleared,
 
