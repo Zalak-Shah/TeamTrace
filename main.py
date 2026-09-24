@@ -23,7 +23,6 @@ Improved:
 
 import os
 import re
-import sqlite3
 from datetime import date, datetime
 from typing import Optional, List, Dict, Any
 
@@ -3550,11 +3549,9 @@ async def screen_document(
 @app.get("/api/dashboard")
 def get_dashboard():
 
-    conn = sqlite3.connect(
-        "bordershield.db"
-    )
+    from database import get_connection
 
-    conn.row_factory = sqlite3.Row
+    conn = get_connection()
 
     cursor = conn.cursor()
 
