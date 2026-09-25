@@ -1,7 +1,8 @@
 fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
 opencv-python-headless
 numpy
 requests
-python-dotenv
-python-multipart
 psycopg2-binary
