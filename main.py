@@ -1,30 +1,14 @@
 """
 ============================================================
 TeamTrace / BorderShield AI - Backend
-OCR.space + OpenCV + SQLite Identity Intelligence
-============================================================
-
-FULL REPLACEMENT MAIN.PY
-
-Improved:
-- Visa detection
-- Passport MRZ detection
-- Visa date extraction
-- OCR normalization
-- Expiry date detection
-- Document number extraction
-- Name extraction
-- Visual analysis
-- Risk scoring
-- Dashboard API
-- Identity intelligence API
+OCR.space + OpenCV + PostgreSQL Identity Intelligence
 ============================================================
 """
 
 import os
 import re
 from datetime import date, datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -40,11 +24,8 @@ from database import (
     save_screening,
     get_identity_intelligence,
     add_audit_log,
-    get_audit_chain,
-    verify_audit_chain,
+    get_connection,
 )
-
-from name_extraction import guess_name
 
 
 # ============================================================
@@ -61,7 +42,7 @@ if not OCR_SPACE_API_KEY:
 
 app = FastAPI(
     title="BorderShield AI Backend",
-    version="2.0.0",
+    version="1.0.0",
 )
 
 initialize_database()
@@ -108,7 +89,6 @@ WEIGHTS = {
 
 
 def severity_for_weight(weight: int) -> str:
-
     if weight >= 25:
         return "HIGH"
 
@@ -119,7 +99,6 @@ def severity_for_weight(weight: int) -> str:
 
 
 def status_for_score(score: int) -> str:
-
     if score <= 20:
         return "LOW RISK"
 
@@ -133,83 +112,34 @@ def status_for_score(score: int) -> str:
 
 
 # ============================================================
-# REGEX PATTERNS
+# DOCUMENT NUMBER PATTERNS
 # ============================================================
 
 AADHAAR_NUMBER_RE = re.compile(
     r"\b\d{4}\s?\d{4}\s?\d{4}\b"
 )
 
-
 PAN_NUMBER_RE = re.compile(
     r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
     re.IGNORECASE,
 )
 
-
 PASSPORT_NUMBER_RE = re.compile(
-    r"\b[A-Z]{1,2}\s?\d{6,8}\b",
+    r"\b[A-Z][0-9]{7}\b",
     re.IGNORECASE,
 )
-
 
 DL_NUMBER_RE = re.compile(
     r"\b[A-Z]{2}[-\s]?\d{2}[-\s]?\d{4,11}\b",
     re.IGNORECASE,
 )
 
-
-# ============================================================
-# VISA NUMBER PATTERNS
-# ============================================================
-
-VISA_NUMBER_PATTERNS = [
-
-    # Example:
-    # ABC123456
-    re.compile(
-        r"\b[A-Z]{1,4}\d{5,10}\b",
-        re.IGNORECASE,
-    ),
-
-    # Example:
-    # 123456789
-    re.compile(
-        r"\b\d{7,12}\b"
-    ),
-
-    # Example:
-    # A1234567
-    re.compile(
-        r"\b[A-Z]\d{6,9}\b",
-        re.IGNORECASE,
-    ),
-]
-
-
-# ============================================================
-# DATE REGEX
-# ============================================================
-
 DATE_RE = re.compile(
-    r"""
-    \b(
-        \d{2}[/-]\d{2}[/-]\d{4}
-        |
-        \d{4}[/-]\d{2}[/-]\d{2}
-        |
-        \d{1,2}\s+
-        (?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)
-        \s+\d{4}
-        |
-        \d{1,2}\s+
-        (?:STY|LUT|MAR|KWI|MAJ|CZE|LIP|SIE|WRZ|PAZ|PAŹ|LIS|GRU)
-        \s*/?\s*
-        (?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)
-        \s+\d{4}
-    )\b
-    """,
-    re.IGNORECASE | re.VERBOSE,
+    r"\b("
+    r"\d{2}[/-]\d{2}[/-]\d{4}"
+    r"|"
+    r"\d{4}[/-]\d{2}[/-]\d{2}"
+    r")\b"
 )
 
 
@@ -224,53 +154,33 @@ KEYWORDS = {
         "aadhaar",
         "uidai",
         "government of india",
-        "enrolment",
-        "vid",
     ],
 
     "PAN Card": [
         "income tax department",
         "permanent account number",
         "pan card",
-        "income tax",
     ],
 
     "Passport": [
         "passport",
+        "republic of india",
         "nationality",
         "surname",
         "given name",
         "place of birth",
-        "date of birth",
         "date of issue",
         "date of expiry",
-        "type",
-        "sex",
-        "issuing authority",
     ],
 
     "Visa": [
         "visa",
         "visa number",
-        "visa no",
-        "visa type",
-        "type of visa",
         "entry",
-        "entries",
         "valid from",
         "valid until",
-        "valid till",
-        "valid through",
-        "duration of stay",
-        "number of entries",
-        "issued by",
-        "schengen",
-        "schengen states",
-        "etats schengen",
-        "états schengen",
-        "vfs",
-        "consulate",
-        "embassy",
+        "entries",
+        "visa type",
     ],
 
     "National ID": [
@@ -300,94 +210,7 @@ KEYWORDS = {
 
 
 # ============================================================
-# MONTH MAPPING
-# ============================================================
-
-MONTHS = {
-
-    "JAN": 1,
-    "STY": 1,
-
-    "FEB": 2,
-    "LUT": 2,
-
-    "MAR": 3,
-
-    "APR": 4,
-    "KWI": 4,
-
-    "MAY": 5,
-    "MAJ": 5,
-
-    "JUN": 6,
-    "CZE": 6,
-
-    "JUL": 7,
-    "LIP": 7,
-
-    "AUG": 8,
-
-    "SEP": 9,
-    "WRZ": 9,
-
-    "OCT": 10,
-    "PAZ": 10,
-    "PAŹ": 10,
-
-    "NOV": 11,
-    "LIS": 11,
-
-    "DEC": 12,
-    "GRU": 12,
-}
-
-
-# ============================================================
-# OCR NORMALIZATION
-# ============================================================
-
-def normalize_ocr_text(text: str) -> str:
-
-    if not text:
-        return ""
-
-    text = text.replace("\r", "\n")
-
-    # Common OCR substitutions
-    replacements = {
-        "\u2018": "'",
-        "\u2019": "'",
-        "\u201c": '"',
-        "\u201d": '"',
-        "\u00a0": " ",
-    }
-
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-
-    # Remove excessive spaces
-    text = re.sub(r"[ \t]+", " ", text)
-
-    # Remove excessive blank lines
-    text = re.sub(r"\n{3,}", "\n\n", text)
-
-    return text.strip()
-
-
-def compact_text(text: str) -> str:
-
-    if not text:
-        return ""
-
-    return re.sub(
-        r"[^A-Z0-9]",
-        "",
-        text.upper(),
-    )
-
-
-# ============================================================
-# DATE PARSING
+# DATE HELPER
 # ============================================================
 
 def to_date(value: Optional[str]) -> Optional[date]:
@@ -395,237 +218,23 @@ def to_date(value: Optional[str]) -> Optional[date]:
     if not value:
         return None
 
-    value = value.strip().upper()
-
-    value = re.sub(
-        r"\s+",
-        " ",
-        value,
-    )
-
-    # Normalize separators
-    value = value.replace(
-        " / ",
-        "/",
-    )
-
-    # --------------------------------------------------------
-    # Numeric formats
-    # --------------------------------------------------------
-
-    for fmt in (
+    formats = [
         "%d/%m/%Y",
         "%d-%m-%Y",
         "%Y-%m-%d",
         "%Y/%m/%d",
-    ):
+    ]
+
+    for fmt in formats:
 
         try:
-
             return datetime.strptime(
                 value,
                 fmt,
             ).date()
 
         except ValueError:
-            pass
-
-    # --------------------------------------------------------
-    # Text month
-    # --------------------------------------------------------
-
-    match = re.fullmatch(
-        r"(\d{1,2})\s+([A-ZĄĆĘŁŃÓŚŹŻ]{3,5})"
-        r"(?:\s*/\s*[A-Z]{3,5})?"
-        r"\s+(\d{4})",
-        value,
-    )
-
-    if match:
-
-        day = int(
-            match.group(1)
-        )
-
-        month_name = match.group(2).upper()
-
-        month = MONTHS.get(
-            month_name
-        )
-
-        year = int(
-            match.group(3)
-        )
-
-        if month:
-
-            try:
-
-                return date(
-                    year,
-                    month,
-                    day,
-                )
-
-            except ValueError:
-
-                return None
-
-    return None
-
-
-# ============================================================
-# DATE EXTRACTION
-# ============================================================
-
-def extract_dates(text: str) -> List[str]:
-
-    if not text:
-        return []
-
-    text = normalize_ocr_text(
-        text
-    )
-
-    matches = DATE_RE.findall(
-        text
-    )
-
-    result = []
-
-    for value in matches:
-
-        value = value.strip()
-
-        if value and value not in result:
-
-            result.append(value)
-
-    return result
-
-
-def extract_parsed_dates(text: str) -> List[date]:
-
-    values = extract_dates(
-        text
-    )
-
-    result = []
-
-    for value in values:
-
-        parsed = to_date(
-            value
-        )
-
-        if parsed and parsed not in result:
-
-            result.append(parsed)
-
-    return result
-
-
-# ============================================================
-# LABELED DATE EXTRACTION
-# ============================================================
-
-def extract_labeled_date(
-    text: str,
-    labels: List[str],
-) -> Optional[date]:
-
-    if not text:
-        return None
-
-    normalized = normalize_ocr_text(
-        text
-    )
-
-    # --------------------------------------------------------
-    # Search each line first
-    # --------------------------------------------------------
-
-    lines = normalized.splitlines()
-
-    for index, line in enumerate(lines):
-
-        lower_line = line.lower()
-
-        found_label = False
-
-        for label in labels:
-
-            if label.lower() in lower_line:
-
-                found_label = True
-                break
-
-        if not found_label:
             continue
-
-        # Date on same line
-        dates = extract_dates(
-            line
-        )
-
-        if dates:
-
-            parsed = to_date(
-                dates[0]
-            )
-
-            if parsed:
-                return parsed
-
-        # Date may be on next line because OCR separated columns
-        if index + 1 < len(lines):
-
-            next_line = lines[index + 1]
-
-            dates = extract_dates(
-                next_line
-            )
-
-            if dates:
-
-                parsed = to_date(
-                    dates[0]
-                )
-
-                if parsed:
-                    return parsed
-
-    # --------------------------------------------------------
-    # Search complete text around label
-    # --------------------------------------------------------
-
-    lower_text = normalized.lower()
-
-    for label in labels:
-
-        start = lower_text.find(
-            label.lower()
-        )
-
-        if start == -1:
-            continue
-
-        window = normalized[
-            start:start + 100
-        ]
-
-        dates = extract_dates(
-            window
-        )
-
-        if dates:
-
-            parsed = to_date(
-                dates[0]
-            )
-
-            if parsed:
-                return parsed
 
     return None
 
@@ -636,38 +245,28 @@ def extract_labeled_date(
 
 def classify_document(text: str) -> str:
 
-    text = normalize_ocr_text(
-        text
-    )
-
     lower = text.lower()
-
-    upper = text.upper()
 
     scores = {}
 
     for doc_type, keywords in KEYWORDS.items():
 
-        scores[doc_type] = sum(
-            1
-            for keyword in keywords
-            if keyword.lower() in lower
-        )
+        score = 0
 
-    # --------------------------------------------------------
-    # Aadhaar
-    # --------------------------------------------------------
+        for keyword in keywords:
+
+            if keyword in lower:
+                score += 1
+
+        scores[doc_type] = score
+
 
     if (
         AADHAAR_NUMBER_RE.search(text)
         and scores.get("Aadhaar", 0) > 0
     ):
-
         return "Aadhaar"
 
-    # --------------------------------------------------------
-    # PAN
-    # --------------------------------------------------------
 
     if PAN_NUMBER_RE.search(text):
 
@@ -675,122 +274,34 @@ def classify_document(text: str) -> str:
             scores.get("PAN Card", 0) > 0
             or "income tax" in lower
         ):
-
             return "PAN Card"
 
-    # --------------------------------------------------------
-    # VISA
-    #
-    # Visa is checked BEFORE passport because visa stickers
-    # can contain words such as nationality/date/sex and may
-    # otherwise be incorrectly classified.
-    # --------------------------------------------------------
-
-    visa_score = scores.get(
-        "Visa",
-        0,
-    )
-
-    visa_indicators = [
-        "visa",
-        "schengen",
-        "etats schengen",
-        "états schengen",
-        "valid from",
-        "valid until",
-        "valid till",
-        "valid through",
-        "entries",
-        "duration of stay",
-        "visa no",
-        "visa number",
-        "vfs",
-    ]
-
-    visa_indicator_count = sum(
-        1
-        for item in visa_indicators
-        if item.lower() in lower
-    )
-
-    if (
-        visa_score >= 2
-        or visa_indicator_count >= 2
-    ):
-
-        return "Visa"
-
-    # --------------------------------------------------------
-    # Passport MRZ
-    # --------------------------------------------------------
-
-    if (
-        "P<" in upper
-        or re.search(
-            r"\bP<[A-Z]{3}",
-            upper,
-        )
-    ):
-
-        return "Passport"
-
-    # --------------------------------------------------------
-    # Passport keywords
-    # --------------------------------------------------------
 
     if (
         PASSPORT_NUMBER_RE.search(text)
-        and scores.get("Passport", 0) >= 1
+        and scores.get("Passport", 0) >= 2
     ):
-
         return "Passport"
 
-    if scores.get(
-        "Passport",
-        0,
-    ) >= 2:
 
-        return "Passport"
+    if scores.get("Visa", 0) >= 2:
+        return "Visa"
 
-    # --------------------------------------------------------
-    # Driving Licence
-    # --------------------------------------------------------
 
     if (
         DL_NUMBER_RE.search(text)
-        and scores.get(
-            "Driving Licence",
-            0,
-        ) > 0
+        and scores.get("Driving Licence", 0) > 0
     ):
-
         return "Driving Licence"
 
-    # --------------------------------------------------------
-    # National ID
-    # --------------------------------------------------------
 
-    if scores.get(
-        "National ID",
-        0,
-    ) >= 1:
-
+    if scores.get("National ID", 0) >= 1:
         return "National ID"
 
-    # --------------------------------------------------------
-    # Permit
-    # --------------------------------------------------------
 
-    if scores.get(
-        "Permit",
-        0,
-    ) >= 2:
-
+    if scores.get("Permit", 0) >= 2:
         return "Permit"
 
-    # --------------------------------------------------------
-    # Best keyword score
-    # --------------------------------------------------------
 
     best = max(
         scores,
@@ -798,14 +309,13 @@ def classify_document(text: str) -> str:
     )
 
     if scores[best] > 0:
-
         return best
 
     return "Unknown"
 
 
 # ============================================================
-# DOCUMENT NUMBER EXTRACTION
+# EXTRACT DOCUMENT NUMBER
 # ============================================================
 
 def extract_document_number(
@@ -813,920 +323,116 @@ def extract_document_number(
     doc_type: str,
 ) -> Optional[str]:
 
-    text = normalize_ocr_text(
-        text
-    )
-
-    if not text:
-        return None
-
-    # ========================================================
-    # AADHAAR
-    # ========================================================
-
     if doc_type == "Aadhaar":
 
-        match = AADHAAR_NUMBER_RE.search(
-            text
-        )
+        match = AADHAAR_NUMBER_RE.search(text)
 
         if match:
+            return match.group(0).replace(" ", "")
 
-            return match.group(0).replace(
-                " ",
-                "",
-            )
-
-    # ========================================================
-    # PAN
-    # ========================================================
 
     elif doc_type == "PAN Card":
 
-        match = PAN_NUMBER_RE.search(
-            text
-        )
+        match = PAN_NUMBER_RE.search(text)
 
         if match:
-
             return match.group(0).upper()
 
-    # ========================================================
-    # PASSPORT
-    # ========================================================
 
     elif doc_type == "Passport":
 
-        # First normal search
-        match = PASSPORT_NUMBER_RE.search(
-            text
-        )
+        match = PASSPORT_NUMBER_RE.search(text)
 
         if match:
+            return match.group(0).upper()
 
-            return re.sub(
-                r"\s+",
-                "",
-                match.group(0).upper(),
-            )
-
-        # OCR may insert spaces between letter and number
-        normalized = re.sub(
-            r"(?<=[A-Z])\s+(?=\d)",
-            "",
-            text.upper(),
-        )
-
-        match = PASSPORT_NUMBER_RE.search(
-            normalized
-        )
-
-        if match:
-
-            return re.sub(
-                r"\s+",
-                "",
-                match.group(0).upper(),
-            )
-
-    # ========================================================
-    # DRIVING LICENCE
-    # ========================================================
 
     elif doc_type == "Driving Licence":
 
-        match = DL_NUMBER_RE.search(
-            text
-        )
+        match = DL_NUMBER_RE.search(text)
 
         if match:
+            return match.group(0).upper()
 
-            return re.sub(
-                r"\s+",
-                "",
-                match.group(0).upper(),
-            )
-
-    # ========================================================
-    # VISA
-    # ========================================================
-
-    elif doc_type == "Visa":
-
-        upper_text = text.upper()
-
-        # ----------------------------------------------------
-        # Look around explicit visa-number labels
-        # ----------------------------------------------------
-
-        label_patterns = [
-            r"VISA\s*(?:NO|NUMBER|NR|N[O0])?\s*[:#]?\s*"
-            r"([A-Z0-9]{5,15})",
-
-            r"VISA\s*NUMBER\s*[:#]?\s*"
-            r"([A-Z0-9]{5,15})",
-
-            r"VISA\s*NO\s*[:#]?\s*"
-            r"([A-Z0-9]{5,15})",
-        ]
-
-        for pattern in label_patterns:
-
-            match = re.search(
-                pattern,
-                upper_text,
-                re.IGNORECASE,
-            )
-
-            if match:
-
-                value = re.sub(
-                    r"[^A-Z0-9]",
-                    "",
-                    match.group(1).upper(),
-                )
-
-                if 5 <= len(value) <= 15:
-
-                    return value
-
-        # ----------------------------------------------------
-        # Look line-by-line around visa labels
-        # ----------------------------------------------------
-
-        lines = upper_text.splitlines()
-
-        for index, line in enumerate(lines):
-
-            if (
-                "VISA" in line
-                or "NUMBER" in line
-                or "NO." in line
-                or "NO:" in line
-            ):
-
-                candidates = re.findall(
-                    r"\b[A-Z0-9]{5,15}\b",
-                    line,
-                )
-
-                for candidate in candidates:
-
-                    candidate = candidate.upper()
-
-                    if candidate in (
-                        "VISA",
-                        "NUMBER",
-                        "SCHENGEN",
-                        "ETATS",
-                    ):
-
-                        continue
-
-                    # Must contain either a letter or be long numeric
-                    if (
-                        re.search(
-                            r"[A-Z]",
-                            candidate,
-                        )
-                        or len(candidate) >= 7
-                    ):
-
-                        return candidate
-
-                # Next OCR line
-                if index + 1 < len(lines):
-
-                    next_line = lines[
-                        index + 1
-                    ]
-
-                    candidates = re.findall(
-                        r"\b[A-Z0-9]{5,15}\b",
-                        next_line,
-                    )
-
-                    for candidate in candidates:
-
-                        candidate = candidate.upper()
-
-                        if (
-                            candidate not in (
-                                "VISA",
-                                "NUMBER",
-                                "SCHENGEN",
-                            )
-                        ):
-
-                            return candidate
-
-        # ----------------------------------------------------
-        # Generic fallback
-        # ----------------------------------------------------
-
-        generic_candidates = []
-
-        for pattern in VISA_NUMBER_PATTERNS:
-
-            for match in pattern.finditer(
-                upper_text
-            ):
-
-                value = match.group(0).upper()
-
-                # Avoid dates
-                if re.fullmatch(
-                    r"\d{2,4}[/-]\d{2}[/-]\d{2,4}",
-                    value,
-                ):
-                    continue
-
-                # Avoid obvious years
-                if re.fullmatch(
-                    r"19\d{2}|20\d{2}",
-                    value,
-                ):
-                    continue
-
-                # Avoid common irrelevant OCR words
-                if value in {
-                    "SCHENGEN",
-                    "ETATS",
-                    "VISA",
-                    "EUROPE",
-                    "EUROPEAN",
-                }:
-                    continue
-
-                generic_candidates.append(
-                    value
-                )
-
-        if generic_candidates:
-
-            # Prefer alphanumeric values
-            alpha_numeric = [
-                value
-                for value in generic_candidates
-                if re.search(
-                    r"[A-Z]",
-                    value,
-                )
-                and re.search(
-                    r"\d",
-                    value,
-                )
-            ]
-
-            if alpha_numeric:
-
-                return alpha_numeric[0]
-
-            return generic_candidates[0]
 
     return None
 
 
 # ============================================================
-# PASSPORT MRZ EXTRACTION
+# EXTRACT DATES
 # ============================================================
 
-def extract_mrz(text: str) -> dict:
+def extract_dates(text: str) -> list:
+    return DATE_RE.findall(text)
 
-    result = {
 
-        "detected": False,
+# ============================================================
+# GUESS NAME
+# ============================================================
 
-        "line1": None,
+def guess_name(text: str) -> Optional[str]:
 
-        "line2": None,
+    skip_words = {
 
-        "document_number": None,
+        "GOVERNMENT",
+        "INDIA",
+        "REPUBLIC",
+        "INCOME",
+        "TAX",
+        "DEPARTMENT",
+        "UNIQUE",
+        "IDENTIFICATION",
+        "AUTHORITY",
+        "TRANSPORT",
+        "LICENCE",
+        "LICENSE",
+        "AADHAAR",
+        "PASSPORT",
+        "NATIONALITY",
+        "VISA",
+        "PERMIT",
+        "VALID",
+        "EXPIRY",
+        "SURNAME",
+        "GIVEN",
+        "NAME",
 
-        "nationality": None,
-
-        "date_of_birth": None,
-
-        "sex": None,
-
-        "expiry_date": None,
-
-        "name": None,
-
-        "valid": False,
     }
 
-    if not text:
-        return result
 
-    raw_lines = text.splitlines()
+    for line in text.splitlines():
 
-    lines = []
+        clean = line.strip()
 
-    for raw_line in raw_lines:
-
-        line = raw_line.upper().strip()
-
-        if not line:
-            continue
-
-        # OCR may insert spaces
-        line = line.replace(
-            " ",
-            "<",
-        )
-
-        # Keep MRZ characters
-        line = re.sub(
-            r"[^A-Z0-9<]",
-            "",
-            line,
-        )
-
-        if len(line) >= 30:
-
-            lines.append(
-                line
-            )
-
-    # --------------------------------------------------------
-    # Standard passport TD3 MRZ
-    # --------------------------------------------------------
-
-    for i in range(
-        len(lines) - 1
-    ):
-
-        line1 = lines[i]
-        line2 = lines[i + 1]
-
-        # First line of passport MRZ
-        if not line1.startswith(
-            "P<"
-        ):
+        if not clean:
             continue
 
         if (
-            len(line1) < 35
-            or len(line2) < 35
-        ):
-            continue
-
-        line1 = line1[:44]
-        line2 = line2[:44]
-
-        result["detected"] = True
-
-        result["line1"] = line1
-        result["line2"] = line2
-
-        # ----------------------------------------------------
-        # Name
-        # ----------------------------------------------------
-
-        if len(line1) >= 5:
-
-            name_part = line1[5:]
-
-            parts = name_part.split(
-                "<<",
-                1,
-            )
-
-            if len(parts) == 2:
-
-                surname = (
-                    parts[0]
-                    .replace(
-                        "<",
-                        " ",
-                    )
-                    .strip()
-                )
-
-                given = (
-                    parts[1]
-                    .replace(
-                        "<",
-                        " ",
-                    )
-                    .strip()
-                )
-
-                if given or surname:
-
-                    result["name"] = (
-                        f"{given} {surname}"
-                    ).strip()
-
-        # ----------------------------------------------------
-        # TD3 line 2
-        # ----------------------------------------------------
-
-        if len(line2) >= 27:
-
-            passport_number = (
-                line2[0:9]
-                .replace(
-                    "<",
-                    "",
-                )
-                .strip()
-            )
-
-            if passport_number:
-
-                result[
-                    "document_number"
-                ] = passport_number
-
-            nationality = (
-                line2[10:13]
-                .replace(
-                    "<",
-                    "",
-                )
-                .strip()
-            )
-
-            if nationality:
-
-                result[
-                    "nationality"
-                ] = nationality
-
-            # ------------------------------------------------
-            # DOB
-            # ------------------------------------------------
-
-            dob_raw = line2[13:19]
-
-            if re.fullmatch(
-                r"\d{6}",
-                dob_raw,
-            ):
-
-                yy = int(
-                    dob_raw[0:2]
-                )
-
-                mm = int(
-                    dob_raw[2:4]
-                )
-
-                dd = int(
-                    dob_raw[4:6]
-                )
-
-                year = (
-                    2000 + yy
-                    if yy <= 30
-                    else 1900 + yy
-                )
-
-                try:
-
-                    result[
-                        "date_of_birth"
-                    ] = date(
-                        year,
-                        mm,
-                        dd,
-                    ).isoformat()
-
-                except ValueError:
-                    pass
-
-            # ------------------------------------------------
-            # SEX
-            # ------------------------------------------------
-
-            sex = line2[20:21]
-
-            if sex in (
-                "M",
-                "F",
-            ):
-
-                result["sex"] = sex
-
-            # ------------------------------------------------
-            # EXPIRY
-            # ------------------------------------------------
-
-            expiry_raw = line2[21:27]
-
-            if re.fullmatch(
-                r"\d{6}",
-                expiry_raw,
-            ):
-
-                yy = int(
-                    expiry_raw[0:2]
-                )
-
-                mm = int(
-                    expiry_raw[2:4]
-                )
-
-                dd = int(
-                    expiry_raw[4:6]
-                )
-
-                year = 2000 + yy
-
-                try:
-
-                    result[
-                        "expiry_date"
-                    ] = date(
-                        year,
-                        mm,
-                        dd,
-                    ).isoformat()
-
-                except ValueError:
-                    pass
-
-        result["valid"] = bool(
-            result["document_number"]
-            and result["expiry_date"]
-        )
-
-        return result
-
-    return result
-
-
-# ============================================================
-# VISA MRZ / MACHINE READABLE EXTRACTION
-# ============================================================
-
-def extract_visa_machine_data(
-    text: str,
-) -> dict:
-
-    result = {
-
-        "detected": False,
-
-        "line1": None,
-
-        "line2": None,
-
-        "raw_lines": [],
-
-        "document_number": None,
-
-    }
-
-    if not text:
-        return result
-
-    raw_lines = text.splitlines()
-
-    candidate_lines = []
-
-    for raw_line in raw_lines:
-
-        line = raw_line.upper().strip()
-
-        if not line:
-            continue
-
-        compact = re.sub(
-            r"[^A-Z0-9<]",
-            "",
-            line,
-        )
-
-        # Visa MRZ-like lines can be shorter than passport TD3
-        if (
-            len(compact) >= 25
-            and (
-                "<" in compact
-                or re.search(
-                    r"[A-Z0-9]{10,}",
-                    compact,
-                )
+            4 <= len(clean) <= 50
+            and re.fullmatch(
+                r"[A-Za-z][A-Za-z .'-]+",
+                clean,
             )
         ):
 
-            candidate_lines.append(
-                compact
-            )
+            words = {
+                word.upper()
+                for word in clean.split()
+            }
 
-    # --------------------------------------------------------
-    # Look for lines containing many < separators
-    # --------------------------------------------------------
+            if not (words & skip_words):
 
-    mrz_candidates = [
+                if len(words) <= 5:
+                    return clean
 
-        line
-        for line in candidate_lines
-
-        if line.count("<") >= 3
-    ]
-
-    if mrz_candidates:
-
-        result["detected"] = True
-
-        result[
-            "raw_lines"
-        ] = mrz_candidates[:4]
-
-        result[
-            "line1"
-        ] = mrz_candidates[0]
-
-        if len(
-            mrz_candidates
-        ) > 1:
-
-            result[
-                "line2"
-            ] = mrz_candidates[1]
-
-        # ----------------------------------------------------
-        # Try to find alphanumeric document number
-        # ----------------------------------------------------
-
-        for line in mrz_candidates:
-
-            parts = line.split("<")
-
-            for part in parts:
-
-                part = part.strip()
-
-                if (
-                    5 <= len(part) <= 15
-                    and re.search(
-                        r"[A-Z]",
-                        part,
-                    )
-                    and re.search(
-                        r"\d",
-                        part,
-                    )
-                ):
-
-                    # Don't mistake country codes
-                    if len(part) == 3:
-                        continue
-
-                    result[
-                        "document_number"
-                    ] = part
-
-                    return result
-
-    return result
-
-
-# ============================================================
-# VISA FIELD EXTRACTION
-# ============================================================
-
-def extract_visa_fields(
-    text: str,
-) -> dict:
-
-    result = {
-
-        "visa_number": None,
-
-        "valid_from": None,
-
-        "valid_until": None,
-
-        "entries": None,
-
-        "duration_of_stay": None,
-
-        "visa_type": None,
-
-        "issuing_country": None,
-    }
-
-    if not text:
-        return result
-
-    normalized = normalize_ocr_text(
-        text
-    )
-
-    # --------------------------------------------------------
-    # VISA NUMBER
-    # --------------------------------------------------------
-
-    result[
-        "visa_number"
-    ] = extract_document_number(
-        normalized,
-        "Visa",
-    )
-
-    # --------------------------------------------------------
-    # VALID FROM
-    # --------------------------------------------------------
-
-    valid_from = extract_labeled_date(
-        normalized,
-        [
-            "valid from",
-            "valid from:",
-            "from",
-            "start date",
-            "date of issue",
-            "issued",
-            "date of validity",
-        ],
-    )
-
-    if valid_from:
-
-        result[
-            "valid_from"
-        ] = valid_from.isoformat()
-
-    # --------------------------------------------------------
-    # VALID UNTIL
-    # --------------------------------------------------------
-
-    valid_until = extract_labeled_date(
-        normalized,
-        [
-            "valid until",
-            "valid until:",
-            "valid till",
-            "valid till:",
-            "valid through",
-            "valid through:",
-            "until",
-            "expiry",
-            "expiration",
-            "date of expiry",
-            "date of expiration",
-        ],
-    )
-
-    if valid_until:
-
-        result[
-            "valid_until"
-        ] = valid_until.isoformat()
-
-    # --------------------------------------------------------
-    # ENTRIES
-    # --------------------------------------------------------
-
-    entry_match = re.search(
-        r"(?:entries|entry)"
-        r"\s*[:\-]?\s*"
-        r"(1|2|3|MULT|MULTIPLE|01|02|03)",
-        normalized,
-        re.IGNORECASE,
-    )
-
-    if entry_match:
-
-        result[
-            "entries"
-        ] = entry_match.group(1).upper()
-
-    # --------------------------------------------------------
-    # DURATION OF STAY
-    # --------------------------------------------------------
-
-    duration_match = re.search(
-        r"(?:duration\s+of\s+stay|stay)"
-        r"\s*[:\-]?\s*"
-        r"(\d{1,3})\s*(?:DAYS?|JOURS?)?",
-        normalized,
-        re.IGNORECASE,
-    )
-
-    if duration_match:
-
-        result[
-            "duration_of_stay"
-        ] = duration_match.group(1)
-
-    # --------------------------------------------------------
-    # VISA TYPE
-    # --------------------------------------------------------
-
-    type_match = re.search(
-        r"(?:visa\s+type|type\s+of\s+visa|type)"
-        r"\s*[:\-]?\s*"
-        r"([A-Z]{1,5})\b",
-        normalized,
-        re.IGNORECASE,
-    )
-
-    if type_match:
-
-        result[
-            "visa_type"
-        ] = type_match.group(1).upper()
-
-    return result
-
-
-# ============================================================
-# VISA EXPIRY FALLBACK
-# ============================================================
-
-def find_best_visa_expiry(
-    text: str,
-    visa_fields: dict,
-) -> Optional[date]:
-
-    # First choice:
-    # explicitly labeled valid until / expiry
-
-    if visa_fields.get(
-        "valid_until"
-    ):
-
-        try:
-
-            return date.fromisoformat(
-                visa_fields[
-                    "valid_until"
-                ]
-            )
-
-        except (
-            ValueError,
-            TypeError,
-        ):
-            pass
-
-    # --------------------------------------------------------
-    # Fallback: search labels again
-    # --------------------------------------------------------
-
-    labeled = extract_labeled_date(
-        text,
-        [
-            "valid until",
-            "valid till",
-            "valid through",
-            "expiry",
-            "expiration",
-            "date of expiry",
-        ],
-    )
-
-    if labeled:
-
-        return labeled
-
-    # --------------------------------------------------------
-    # Last fallback:
-    # use the latest future date.
-    #
-    # This is intentionally NOT the first date.
-    # It prevents DOB / issue dates from being used as
-    # expiry when OCR does not preserve labels.
-    # --------------------------------------------------------
-
-    parsed_dates = extract_parsed_dates(
-        text
-    )
-
-    if not parsed_dates:
-        return None
-
-    today = date.today()
-
-    future_dates = [
-        item
-        for item in parsed_dates
-        if item >= today
-    ]
-
-    if future_dates:
-
-        return max(
-            future_dates
-        )
-
-    return max(
-        parsed_dates
-    )
+    return None
 
 
 # ============================================================
 # VISUAL ANALYSIS
 # ============================================================
 
-def analyze_document_image(
-    file_bytes: bytes,
-) -> dict:
+def analyze_document_image(file_bytes: bytes):
 
     result = {
 
@@ -1749,229 +455,159 @@ def analyze_document_image(
         "visual_issues": [],
 
         "visual_checks": [],
+
     }
+
 
     image_array = np.frombuffer(
         file_bytes,
         dtype=np.uint8,
     )
 
+
     image = cv2.imdecode(
         image_array,
         cv2.IMREAD_COLOR,
     )
 
+
     if image is None:
 
-        result[
-            "visual_checks"
-        ].append(
+        result["visual_checks"].append(
             "Visual analysis skipped for non-image document"
         )
 
-        result[
-            "quality_score"
-        ] = 80
+        result["quality_score"] = 80
 
         return result
 
-    result[
-        "is_image"
-    ] = True
+
+    result["is_image"] = True
+
 
     height, width = image.shape[:2]
 
     result["width"] = width
     result["height"] = height
 
-    result[
-        "aspect_ratio"
-    ] = round(
+    result["aspect_ratio"] = round(
         width / height,
         3,
     )
 
-    # --------------------------------------------------------
+
     # Resolution
-    # --------------------------------------------------------
 
     if width < 500 or height < 500:
 
-        result[
-            "visual_issues"
-        ].append(
+        result["visual_issues"].append(
             "Low image resolution"
         )
 
     else:
 
-        result[
-            "visual_checks"
-        ].append(
+        result["visual_checks"].append(
             "Image resolution is sufficient"
         )
 
-    # --------------------------------------------------------
-    # Grayscale
-    # --------------------------------------------------------
 
     gray = cv2.cvtColor(
         image,
         cv2.COLOR_BGR2GRAY,
     )
 
-    # --------------------------------------------------------
+
     # Blur
-    # --------------------------------------------------------
 
     blur_score = cv2.Laplacian(
         gray,
         cv2.CV_64F,
     ).var()
 
-    result[
-        "blur_score"
-    ] = round(
+    result["blur_score"] = round(
         float(blur_score),
         2,
     )
 
+
     if blur_score < 50:
 
-        result[
-            "visual_issues"
-        ].append(
+        result["visual_issues"].append(
             "Image appears blurry"
         )
 
     else:
 
-        result[
-            "visual_checks"
-        ].append(
+        result["visual_checks"].append(
             "Image sharpness is acceptable"
         )
 
-    # --------------------------------------------------------
+
     # Brightness
-    # --------------------------------------------------------
 
-    brightness = float(
-        np.mean(gray)
-    )
+    brightness = float(np.mean(gray))
 
-    result[
-        "brightness"
-    ] = round(
+    result["brightness"] = round(
         brightness,
         2,
     )
 
+
     if brightness < 40:
 
-        result[
-            "visual_issues"
-        ].append(
+        result["visual_issues"].append(
             "Image is too dark"
         )
 
     elif brightness > 230:
 
-        result[
-            "visual_issues"
-        ].append(
+        result["visual_issues"].append(
             "Image is excessively bright"
         )
 
     else:
 
-        result[
-            "visual_checks"
-        ].append(
+        result["visual_checks"].append(
             "Image brightness is acceptable"
         )
 
-    # --------------------------------------------------------
+
     # Contrast
-    # --------------------------------------------------------
 
-    contrast = float(
-        np.std(gray)
-    )
+    contrast = float(np.std(gray))
 
-    result[
-        "contrast"
-    ] = round(
+    result["contrast"] = round(
         contrast,
         2,
     )
 
+
     if contrast < 20:
 
-        result[
-            "visual_issues"
-        ].append(
+        result["visual_issues"].append(
             "Image has very low contrast"
         )
 
     else:
 
-        result[
-            "visual_checks"
-        ].append(
+        result["visual_checks"].append(
             "Image contrast is acceptable"
         )
 
-    # --------------------------------------------------------
-    # Quality score
-    # --------------------------------------------------------
 
     quality_score = 100
 
     quality_score -= (
-        len(
-            result[
-                "visual_issues"
-            ]
-        )
-        * 15
+        len(result["visual_issues"]) * 15
     )
 
-    result[
-        "quality_score"
-    ] = max(
+    result["quality_score"] = max(
         0,
         quality_score,
     )
 
+
     return result
-
-
-# ============================================================
-# OCR CONFIDENCE
-# ============================================================
-
-def estimate_ocr_confidence(
-    text: str,
-) -> float:
-
-    if not text:
-        return 0.0
-
-    length = len(
-        text.strip()
-    )
-
-    if length < 20:
-        return 0.45
-
-    if length < 50:
-        return 0.60
-
-    if length < 100:
-        return 0.72
-
-    return 0.85
 
 
 # ============================================================
@@ -1982,117 +618,50 @@ def run_validation(
     doc_type: str,
     text: str,
     ocr_confidence: float,
-    mrz: Optional[dict] = None,
 ):
 
     issues = []
-
     verified = []
-
     score = 0
 
-    mrz = mrz or {}
 
-    normalized_text = normalize_ocr_text(
-        text
-    )
-
-    # ========================================================
     # NAME
-    # ========================================================
 
-    name = guess_name(
-        normalized_text
-    )
+    name = guess_name(text)
 
-    if (
-        doc_type == "Passport"
-        and mrz.get("name")
-    ):
-
-        name = mrz[
-            "name"
-        ]
+    if name:
 
         verified.append(
-            "Passport name detected from MRZ"
-        )
-
-    elif name:
-
-        verified.append(
-            "Name information was detected"
+            "A likely name was detected"
         )
 
     else:
 
         issues.append({
 
-            "title":
-                "Name not detected",
+            "title": "Required field missing",
 
-            "severity":
-                "MEDIUM",
+            "severity": severity_for_weight(
+                WEIGHTS["MISSING_REQUIRED_FIELD"]
+            ),
 
             "description":
-                "The OCR could not confidently locate the document name.",
+                "Could not locate a likely name on the document.",
+
         })
 
         score += WEIGHTS[
             "MISSING_REQUIRED_FIELD"
         ]
 
-    # ========================================================
+
     # DOCUMENT NUMBER
-    # ========================================================
 
     doc_number = extract_document_number(
-        normalized_text,
+        text,
         doc_type,
     )
 
-    # Passport MRZ fallback
-    if (
-        not doc_number
-        and doc_type == "Passport"
-        and mrz.get(
-            "document_number"
-        )
-    ):
-
-        doc_number = mrz[
-            "document_number"
-        ]
-
-        verified.append(
-            "Passport number recovered from MRZ"
-        )
-
-    # Visa machine-readable fallback
-    if (
-        not doc_number
-        and doc_type == "Visa"
-    ):
-
-        visa_machine = (
-            extract_visa_machine_data(
-                normalized_text
-            )
-        )
-
-        if visa_machine.get(
-            "document_number"
-        ):
-
-            doc_number = (
-                visa_machine[
-                    "document_number"
-                ]
-            )
-
-            verified.append(
-                "Visa number recovered from machine-readable data"
-            )
 
     if doc_number:
 
@@ -2101,488 +670,115 @@ def run_validation(
         )
 
     elif doc_type in (
+
         "Aadhaar",
         "PAN Card",
         "Passport",
         "Driving Licence",
-        "Visa",
+
     ):
 
         issues.append({
 
             "title":
-                "Document number not detected",
+                "Invalid or missing document number",
 
             "severity":
                 severity_for_weight(
-                    WEIGHTS[
-                        "INVALID_NUMBER_FORMAT"
-                    ]
+                    WEIGHTS["INVALID_NUMBER_FORMAT"]
                 ),
 
             "description":
-                f"No valid {doc_type} number could be extracted from the document.",
+                f"No valid {doc_type} number pattern was found.",
+
         })
 
         score += WEIGHTS[
             "INVALID_NUMBER_FORMAT"
         ]
 
-    # ========================================================
+
     # DATES
-    # ========================================================
 
-    dates_found = extract_dates(
-        normalized_text
-    )
+    dates_found = extract_dates(text)
 
-    parsed_dates = []
-
-    for value in dates_found:
-
-        parsed = to_date(
-            value
-        )
-
-        if parsed:
-
-            parsed_dates.append(
-                parsed
-            )
-
-    # Passport MRZ dates
-    if doc_type == "Passport":
-
-        for mrz_key in (
-            "date_of_birth",
-            "expiry_date",
-        ):
-
-            if mrz.get(mrz_key):
-
-                try:
-
-                    parsed_dates.append(
-                        date.fromisoformat(
-                            mrz[
-                                mrz_key
-                            ]
-                        )
-                    )
-
-                except (
-                    ValueError,
-                    TypeError,
-                ):
-
-                    pass
-
-    parsed_dates = list(
-        dict.fromkeys(
-            parsed_dates
-        )
-    )
-
-    if parsed_dates:
-
-        verified.append(
-            f"{len(parsed_dates)} valid date(s) extracted"
-        )
-
-    elif doc_type in (
-        "Passport",
-        "Visa",
-        "Driving Licence",
-        "Permit",
-    ):
+    if not dates_found:
 
         issues.append({
 
-            "title":
-                "Date could not be verified",
+            "title": "Required field missing",
 
             "severity":
-                "MEDIUM",
+                severity_for_weight(
+                    WEIGHTS["MISSING_REQUIRED_FIELD"]
+                ),
 
             "description":
-                "No supported date format could be confidently converted to a calendar date.",
+                "No date could be extracted from the document.",
+
         })
 
         score += WEIGHTS[
             "MISSING_REQUIRED_FIELD"
         ]
 
-    # ========================================================
-    # VISA VALIDATION
-    # ========================================================
+    else:
 
-    visa_fields = {}
-
-    if doc_type == "Visa":
-
-        visa_fields = extract_visa_fields(
-            normalized_text
+        verified.append(
+            "Date information was extracted"
         )
 
-        # ----------------------------------------------------
-        # If labeled valid-from date found
-        # ----------------------------------------------------
 
-        if visa_fields.get(
-            "valid_from"
+        if doc_type in (
+
+            "Passport",
+            "Visa",
+            "Driving Licence",
+            "Permit",
+
         ):
 
-            verified.append(
-                f"Visa valid-from date detected: "
-                f"{visa_fields['valid_from']}"
-            )
+            parsed_dates = []
 
-        # ----------------------------------------------------
-        # Expiry
-        # ----------------------------------------------------
+            for value in dates_found:
 
-        visa_expiry = (
-            find_best_visa_expiry(
-                normalized_text,
-                visa_fields,
-            )
-        )
+                parsed = to_date(value)
 
-        if visa_expiry:
+                if parsed:
+                    parsed_dates.append(parsed)
 
-            visa_fields[
-                "valid_until"
-            ] = visa_expiry.isoformat()
 
-            if visa_expiry < date.today():
+            if parsed_dates:
 
-                issues.append({
+                latest_date = max(parsed_dates)
 
-                    "title":
-                        "Visa appears expired",
-
-                    "severity":
-                        "HIGH",
-
-                    "description":
-                        f"Detected visa expiry date "
-                        f"{visa_expiry.isoformat()} "
-                        f"is earlier than today's date.",
-                })
-
-                score += WEIGHTS[
-                    "EXPIRED_DOCUMENT"
-                ]
-
-            else:
-
-                verified.append(
-                    f"Visa expiry date "
-                    f"{visa_expiry.isoformat()} "
-                    f"is valid"
-                )
-
-        else:
-
-            issues.append({
-
-                "title":
-                    "Visa expiry date not detected",
-
-                "severity":
-                    "MEDIUM",
-
-                "description":
-                    "The visa was detected, but a valid-until or expiry date could not be confidently extracted.",
-            })
-
-            score += WEIGHTS[
-                "MISSING_REQUIRED_FIELD"
-            ]
-
-    # ========================================================
-    # PASSPORT EXPIRY
-    # ========================================================
-
-    if doc_type == "Passport":
-
-        expiry_candidate = None
-
-        if mrz.get(
-            "expiry_date"
-        ):
-
-            try:
-
-                expiry_candidate = date.fromisoformat(
-                    mrz[
-                        "expiry_date"
-                    ]
-                )
-
-            except (
-                ValueError,
-                TypeError,
-            ):
-
-                pass
-
-        # Prefer labeled expiry date
-        if expiry_candidate is None:
-
-            expiry_candidate = extract_labeled_date(
-                normalized_text,
-                [
-                    "date of expiry",
-                    "expiry date",
-                    "expiration date",
-                    "date of expiration",
-                ],
-            )
-
-        # Last fallback
-        if (
-            expiry_candidate is None
-            and parsed_dates
-        ):
-
-            future_dates = [
-                item
-                for item in parsed_dates
-                if item >= date.today()
-            ]
-
-            if future_dates:
-
-                expiry_candidate = max(
-                    future_dates
-                )
-
-        if expiry_candidate:
-
-            if expiry_candidate < date.today():
-
-                issues.append({
-
-                    "title":
-                        "Passport appears expired",
-
-                    "severity":
-                        "HIGH",
-
-                    "description":
-                        f"Detected expiry date "
-                        f"{expiry_candidate.isoformat()} "
-                        f"is earlier than today's date.",
-                })
-
-                score += WEIGHTS[
-                    "EXPIRED_DOCUMENT"
-                ]
-
-            else:
-
-                verified.append(
-                    f"Passport expiry date "
-                    f"{expiry_candidate.isoformat()} "
-                    f"is valid"
-                )
-
-    # ========================================================
-    # OTHER DOCUMENT EXPIRY
-    # ========================================================
-
-    elif doc_type in (
-        "Driving Licence",
-        "Permit",
-    ):
-
-        expiry_candidate = extract_labeled_date(
-            normalized_text,
-            [
-                "valid until",
-                "valid till",
-                "expiry",
-                "expiry date",
-                "date of expiry",
-                "expiration",
-            ],
-        )
-
-        if expiry_candidate is None:
-
-            future_dates = [
-                item
-                for item in parsed_dates
-                if item >= date.today()
-            ]
-
-            if future_dates:
-
-                expiry_candidate = max(
-                    future_dates
-                )
-
-        if expiry_candidate:
-
-            if expiry_candidate < date.today():
-
-                issues.append({
-
-                    "title":
-                        "Document may be expired",
-
-                    "severity":
-                        "MEDIUM",
-
-                    "description":
-                        f"Detected expiry date "
-                        f"{expiry_candidate.isoformat()} "
-                        f"is earlier than today's date.",
-                })
-
-                score += WEIGHTS[
-                    "EXPIRED_DOCUMENT"
-                ]
-
-            else:
-
-                verified.append(
-                    f"Document expiry date "
-                    f"{expiry_candidate.isoformat()} "
-                    f"is valid"
-                )
-
-    # ========================================================
-    # MRZ VALIDATION
-    # ========================================================
-
-    if doc_type == "Passport":
-
-        if mrz.get(
-            "detected"
-        ):
-
-            verified.append(
-                "Passport MRZ detected"
-            )
-
-            mrz_number = mrz.get(
-                "document_number"
-            )
-
-            if (
-                doc_number
-                and mrz_number
-            ):
-
-                visible_normalized = re.sub(
-                    r"[^A-Z0-9]",
-                    "",
-                    doc_number.upper(),
-                )
-
-                mrz_normalized = re.sub(
-                    r"[^A-Z0-9]",
-                    "",
-                    mrz_number.upper(),
-                )
-
-                if (
-                    visible_normalized
-                    == mrz_normalized
-                ):
-
-                    verified.append(
-                        "Passport number matches MRZ"
-                    )
-
-                else:
+                if latest_date < date.today():
 
                     issues.append({
 
                         "title":
-                            "MRZ passport number mismatch",
-
-                        "severity":
-                            "HIGH",
-
-                        "description":
-                            (
-                                f"Visible passport number "
-                                f"'{visible_normalized}' "
-                                f"does not match MRZ "
-                                f"'{mrz_normalized}'."
-                            ),
-                    })
-
-                    score += WEIGHTS[
-                        "CRITICAL_MISMATCH"
-                    ]
-
-            mrz_expiry = mrz.get(
-                "expiry_date"
-            )
-
-            if mrz_expiry:
-
-                try:
-
-                    mrz_expiry_date = date.fromisoformat(
-                        mrz_expiry
-                    )
-
-                    if (
-                        mrz_expiry_date
-                        < date.today()
-                    ):
-
-                        issues.append({
-
-                            "title":
-                                "MRZ indicates expired passport",
-
-                            "severity":
-                                "HIGH",
-
-                            "description":
-                                f"MRZ expiry date is "
-                                f"{mrz_expiry}.",
-                        })
-
-                        score += WEIGHTS[
-                            "EXPIRED_DOCUMENT"
-                        ]
-
-                    else:
-
-                        verified.append(
-                            "MRZ expiry date is valid"
-                        )
-
-                except ValueError:
-
-                    issues.append({
-
-                        "title":
-                            "Invalid MRZ expiry date",
+                            "Possible expired document",
 
                         "severity":
                             "MEDIUM",
 
                         "description":
-                            "The passport MRZ was detected but its expiry date could not be parsed.",
+                            "The latest detected date appears to have expired.",
+
                     })
 
-        else:
+                    score += WEIGHTS[
+                        "EXPIRED_DOCUMENT"
+                    ]
 
-            verified.append(
-                "MRZ not detected; visible passport fields used"
-            )
+                else:
 
-    # ========================================================
+                    verified.append(
+                        "Latest detected date is not expired"
+                    )
+
+
     # OCR CONFIDENCE
-    # ========================================================
 
     if ocr_confidence < 0.60:
 
@@ -2595,7 +791,8 @@ def run_validation(
                 "MEDIUM",
 
             "description":
-                "OCR quality appears low. Manual verification is recommended.",
+                "OCR quality appears low.",
+
         })
 
         score += WEIGHTS[
@@ -2608,9 +805,8 @@ def run_validation(
             "OCR extraction completed successfully"
         )
 
-    # ========================================================
+
     # UNKNOWN DOCUMENT
-    # ========================================================
 
     if doc_type == "Unknown":
 
@@ -2624,11 +820,13 @@ def run_validation(
 
             "description":
                 "No supported document pattern was confidently detected.",
+
         })
 
         score += WEIGHTS[
             "CRITICAL_MISMATCH"
         ]
+
 
     return (
         issues,
@@ -2636,7 +834,6 @@ def run_validation(
         score,
         name,
         doc_number,
-        visa_fields,
     )
 
 
@@ -2655,14 +852,13 @@ def perform_ocr(
 
             status_code=500,
 
-            detail=(
-                "OCR_SPACE_API_KEY is missing from .env"
-            ),
+            detail="OCR_SPACE_API_KEY is missing from .env",
+
         )
 
-    url = (
-        "https://api.ocr.space/parse/image"
-    )
+
+    url = "https://api.ocr.space/parse/image"
+
 
     files = {
 
@@ -2670,34 +866,22 @@ def perform_ocr(
             filename,
             file_bytes,
         )
+
     }
+
 
     data = {
 
-        "apikey":
-            OCR_SPACE_API_KEY,
+        "apikey": OCR_SPACE_API_KEY,
 
-        "language":
-            "eng",
+        "language": "eng",
 
-        "isOverlayRequired":
-            "false",
+        "isOverlayRequired": "false",
 
-        "OCREngine":
-            "2",
+        "OCREngine": "2",
 
-        "detectOrientation":
-            "true",
-
-        "scale":
-            "true",
-
-        "isTable":
-            "false",
-
-        "isSearchablePdfHideTextLayer":
-            "true",
     }
+
 
     try:
 
@@ -2710,11 +894,13 @@ def perform_ocr(
             data=data,
 
             timeout=60,
+
         )
 
         response.raise_for_status()
 
         result = response.json()
+
 
     except requests.RequestException as error:
 
@@ -2722,65 +908,48 @@ def perform_ocr(
 
             status_code=502,
 
-            detail=(
-                f"OCR service error: {str(error)}"
-            ),
+            detail=f"OCR service error: {str(error)}",
+
         )
 
-    if result.get(
-        "IsErroredOnProcessing"
-    ):
+
+    if result.get("IsErroredOnProcessing"):
 
         error_message = (
 
-            result.get(
-                "ErrorMessage"
-            )
+            result.get("ErrorMessage")
 
-            or result.get(
-                "ErrorDetails"
-            )
+            or result.get("ErrorDetails")
 
             or "OCR processing failed"
+
         )
 
         raise HTTPException(
 
             status_code=502,
 
-            detail=str(
-                error_message
-            ),
+            detail=str(error_message),
+
         )
+
 
     parsed_results = result.get(
         "ParsedResults",
         [],
     )
 
-    if not parsed_results:
 
+    if not parsed_results:
         return ""
 
-    extracted = []
 
-    for item in parsed_results:
+    return "\n".join(
 
-        parsed_text = item.get(
-            "ParsedText",
-            "",
-        )
+        item.get("ParsedText", "")
 
-        if parsed_text:
+        for item in parsed_results
 
-            extracted.append(
-                parsed_text
-            )
-
-    return normalize_ocr_text(
-        "\n".join(
-            extracted
-        )
     )
 
 
@@ -2799,8 +968,6 @@ def root():
         "status":
             "ONLINE",
 
-        "version":
-            "2.0.0",
     }
 
 
@@ -2813,18 +980,42 @@ def health():
 
     return {
 
-        "success":
-            True,
+        "success": True,
 
-        "status":
-            "ONLINE",
+        "status": "ONLINE",
 
-        "service":
-            "BorderShield AI",
+        "service": "BorderShield AI",
 
-        "version":
-            "2.0.0",
     }
+
+
+# ============================================================
+# DATABASE HEALTH
+# ============================================================
+
+@app.get("/api/database-health")
+def database_health():
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 AS ok")
+        result = cursor.fetchone()
+        return {
+            "success": True,
+            "database": "PostgreSQL",
+            "connected": bool(result and result["ok"] == 1),
+        }
+    except Exception as error:
+        return {
+            "success": False,
+            "database": "PostgreSQL",
+            "connected": False,
+            "error": str(error),
+        }
+    finally:
+        if conn:
+            conn.close()
 
 
 # ============================================================
@@ -2840,9 +1031,8 @@ async def screen_document(
 
 ):
 
-    # ========================================================
+
     # FILE TYPE
-    # ========================================================
 
     if file.content_type not in ALLOWED_CONTENT_TYPES:
 
@@ -2850,35 +1040,22 @@ async def screen_document(
 
             status_code=400,
 
-            detail=(
-                f"Unsupported file type: "
-                f"{file.content_type}"
-            ),
+            detail=f"Unsupported file type: {file.content_type}",
+
         )
 
-    # ========================================================
+
     # READ FILE
-    # ========================================================
 
     file_bytes = await file.read()
 
-    if not file_bytes:
 
-        raise HTTPException(
-
-            status_code=400,
-
-            detail="Uploaded file is empty.",
-        )
-
-    # ========================================================
     # FILE SIZE
-    # ========================================================
 
-    size_mb = (
-        len(file_bytes)
-        / (1024 * 1024)
+    size_mb = len(file_bytes) / (
+        1024 * 1024
     )
+
 
     if size_mb > MAX_FILE_SIZE_MB:
 
@@ -2887,66 +1064,38 @@ async def screen_document(
             status_code=400,
 
             detail=(
-                f"File too large "
-                f"({size_mb:.1f} MB). "
-                f"Maximum is "
-                f"{MAX_FILE_SIZE_MB} MB."
+                f"File too large ({size_mb:.1f} MB). "
+                f"Maximum is {MAX_FILE_SIZE_MB} MB."
             ),
+
         )
 
-    # ========================================================
+
     # VISUAL ANALYSIS
-    # ========================================================
 
-    visual_analysis = (
-        analyze_document_image(
-            file_bytes
-        )
+    visual_analysis = analyze_document_image(
+        file_bytes
     )
 
-    # ========================================================
+
     # OCR
-    # ========================================================
 
     text = perform_ocr(
 
         file_bytes,
 
-        file.filename
-        or "document",
+        file.filename or "document",
+
     )
 
-    text = normalize_ocr_text(
-        text
-    )
 
-    print(
-        "\n================================================"
-    )
-
-    print(
-        "OCR TEXT:"
-    )
-
-    print(
-        text
-    )
-
-    print(
-        "================================================\n"
-    )
-
-    # ========================================================
     # NO TEXT
-    # ========================================================
 
     if not text.strip():
 
         score = 80
 
-        status = status_for_score(
-            score
-        )
+        status = status_for_score(score)
 
         issues = [
 
@@ -2960,11 +1109,13 @@ async def screen_document(
 
                 "description":
                     "No readable text could be extracted.",
+
             }
 
         ]
 
         screening_id = None
+
 
         try:
 
@@ -2984,18 +1135,15 @@ async def screen_document(
 
                 issues=issues,
 
-                checkpoint=(
-                    "SSB Border Outpost - Raxaul"
-                ),
+                checkpoint="Main Border Checkpoint",
 
-                officer_name=(
-                    "BorderShield AI"
-                ),
+                officer_name="BorderShield AI",
+
             )
 
             print(
-                "SCREENING SAVED SUCCESSFULLY!",
-                f"ID = {screening_id}",
+                f"SCREENING SAVED SUCCESSFULLY! "
+                f"ID = {screening_id}"
             )
 
         except Exception as error:
@@ -3005,10 +1153,10 @@ async def screen_document(
                 error,
             )
 
+
         return {
 
-            "success":
-                True,
+            "success": True,
 
             "screening_id":
                 screening_id,
@@ -3025,75 +1173,23 @@ async def screen_document(
             "issues":
                 issues,
 
-            "verified_checks":
-                [],
-
-            "extracted_fields": {
-
-                "name_guess":
-                    None,
-
-                "document_number":
-                    None,
-
-                "dates_found":
-                    [],
-
-                "mrz":
-                    {},
-
-                "visa":
-                    {},
-            },
-
             "visual_analysis":
                 visual_analysis,
+
         }
 
-    # ========================================================
+
     # OCR CONFIDENCE
-    # ========================================================
 
-    ocr_confidence = (
-        estimate_ocr_confidence(
-            text
-        )
-    )
+    ocr_confidence = 0.85
 
-    # ========================================================
+
     # DOCUMENT TYPE
-    # ========================================================
 
-    doc_type = classify_document(
-        text
-    )
+    doc_type = classify_document(text)
 
-    print(
-        "DETECTED DOCUMENT TYPE:",
-        doc_type,
-    )
 
-    # ========================================================
-    # PASSPORT MRZ
-    # ========================================================
-
-    mrz = extract_mrz(
-        text
-    )
-
-    # ========================================================
-    # VISA MACHINE DATA
-    # ========================================================
-
-    visa_machine = (
-        extract_visa_machine_data(
-            text
-        )
-    )
-
-    # ========================================================
     # NORMALIZATION
-    # ========================================================
 
     aliases = {
 
@@ -3116,45 +1212,45 @@ async def screen_document(
             "permit",
 
         "aadhaar":
-            "national id",
+            "aadhaar",
 
         "pan card":
             "pan card",
+
     }
 
-    expected = (
-        expected_document_type
-        .strip()
-        .lower()
-    )
 
-    detected = (
-        doc_type
-        .strip()
-        .lower()
-    )
+    expected = expected_document_type.strip().lower()
+
+    detected = doc_type.strip().lower()
+
 
     expected_normalized = aliases.get(
         expected,
         expected,
     )
 
+
     detected_normalized = aliases.get(
         detected,
         detected,
     )
 
-    # ========================================================
+
     # VALIDATION
-    # ========================================================
 
     (
+
         issues,
+
         verified,
+
         score,
+
         name,
+
         doc_number,
-        visa_fields,
+
     ) = run_validation(
 
         doc_type,
@@ -3163,69 +1259,12 @@ async def screen_document(
 
         ocr_confidence,
 
-        mrz,
     )
 
-    # ========================================================
-    # VISA NAME FALLBACK
-    # ========================================================
 
-    if (
-        doc_type == "Visa"
-        and not name
-    ):
-
-        # Try simple name patterns from OCR
-        name_patterns = [
-
-            r"(?:surname|family\s+name)"
-            r"\s*[:\-]?\s*"
-            r"([A-Z][A-Z\s]{2,40})",
-
-            r"(?:given\s+name|given\s+names)"
-            r"\s*[:\-]?\s*"
-            r"([A-Z][A-Z\s]{2,40})",
-        ]
-
-        for pattern in name_patterns:
-
-            match = re.search(
-                pattern,
-                text,
-                re.IGNORECASE,
-            )
-
-            if match:
-
-                candidate = (
-                    match.group(1)
-                    .strip()
-                )
-
-                candidate = re.sub(
-                    r"\s+",
-                    " ",
-                    candidate,
-                )
-
-                if len(candidate) >= 3:
-
-                    name = candidate
-
-                    verified.append(
-                        "Name recovered from labeled visa field"
-                    )
-
-                    break
-
-    # ========================================================
     # TYPE MISMATCH
-    # ========================================================
 
-    if (
-        expected_normalized
-        != detected_normalized
-    ):
+    if expected_normalized != detected_normalized:
 
         issues.append({
 
@@ -3236,12 +1275,9 @@ async def screen_document(
                 "HIGH",
 
             "description":
-                (
-                    f"Expected "
-                    f"'{expected_document_type}', "
-                    f"but detected "
-                    f"'{doc_type}'."
-                ),
+                f"Expected '{expected_document_type}', "
+                f"but detected '{doc_type}'.",
+
         })
 
         score += WEIGHTS[
@@ -3250,29 +1286,15 @@ async def screen_document(
 
     else:
 
-        if doc_type == "Aadhaar":
+        verified.append(
+            f"Correct document type confirmed: "
+            f"{expected_document_type}"
+        )
 
-            verified.append(
-                "Correct document type confirmed: "
-                "National ID (Aadhaar Card - India)"
-            )
 
-        else:
-
-            verified.append(
-                "Correct document type confirmed: "
-                f"{expected_document_type}"
-            )
-
-    # ========================================================
     # VISUAL ISSUES
-    # ========================================================
 
-    for visual_issue in (
-        visual_analysis[
-            "visual_issues"
-        ]
-    ):
+    for visual_issue in visual_analysis["visual_issues"]:
 
         issues.append({
 
@@ -3284,42 +1306,33 @@ async def screen_document(
 
             "description":
                 visual_issue,
+
         })
 
         score += WEIGHTS[
             "VISUAL_ISSUE"
         ]
 
-    # ========================================================
-    # VISUAL CHECKS
-    # ========================================================
 
-    for visual_check in (
-        visual_analysis[
-            "visual_checks"
-        ]
-    ):
+    # VISUAL CHECKS
+
+    for visual_check in visual_analysis["visual_checks"]:
 
         verified.append(
-            f"Visual check: "
-            f"{visual_check}"
+            f"Visual check: {visual_check}"
         )
 
-    # ========================================================
+
     # LIMIT SCORE
-    # ========================================================
 
     score = max(
         0,
-        min(
-            100,
-            score,
-        ),
+        min(100, score),
     )
 
-    status = status_for_score(
-        score
-    )
+
+    status = status_for_score(score)
+
 
     # ========================================================
     # CREATE IDENTITY
@@ -3327,22 +1340,17 @@ async def screen_document(
 
     identity_id = None
 
+
     try:
 
         if doc_number:
 
-            identity_id = (
-                create_or_get_identity(
+            identity_id = create_or_get_identity(
 
-                    full_name=(
-                        name
-                        or "Unknown"
-                    ),
+                full_name=name or "Unknown",
 
-                    document_number=(
-                        doc_number
-                    ),
-                )
+                document_number=doc_number,
+
             )
 
     except Exception as error:
@@ -3352,11 +1360,13 @@ async def screen_document(
             error,
         )
 
+
     # ========================================================
     # SAVE SCREENING
     # ========================================================
 
     screening_id = None
+
 
     try:
 
@@ -3364,15 +1374,9 @@ async def screen_document(
 
             identity_id=identity_id,
 
-            full_name=(
-                name
-                or "Unknown"
-            ),
+            full_name=name or "Unknown",
 
-            document_number=(
-                doc_number
-                or "Not detected"
-            ),
+            document_number=doc_number or "Not detected",
 
             document_type=doc_type,
 
@@ -3382,19 +1386,18 @@ async def screen_document(
 
             issues=issues,
 
-            checkpoint=(
-                "SSB Border Outpost - Raxaul"
-            ),
+            checkpoint="Main Border Checkpoint",
 
-            officer_name=(
-                "BorderShield AI"
-            ),
+            officer_name="BorderShield AI",
+
         )
+
 
         print(
-            "SCREENING SAVED SUCCESSFULLY!",
-            f"ID = {screening_id}",
+            f"SCREENING SAVED SUCCESSFULLY! "
+            f"ID = {screening_id}"
         )
+
 
     except Exception as error:
 
@@ -3402,6 +1405,7 @@ async def screen_document(
             "DATABASE SAVE ERROR:",
             error,
         )
+
 
     # ========================================================
     # AUDIT LOG
@@ -3411,26 +1415,15 @@ async def screen_document(
 
         add_audit_log(
 
-            action=(
-                "SCREENING_COMPLETED"
-            ),
+            action="SCREENING_COMPLETED",
 
             details=(
-
-                f"Screening ID: "
-                f"{screening_id}, "
-
-                f"Document: "
-                f"{doc_type}, "
-
-                f"Risk Score: "
-                f"{score}, "
-
-                f"Status: "
-                f"{status}"
+                f"Screening ID: {screening_id}, "
+                f"Document: {doc_type}, "
+                f"Risk Score: {score}, "
+                f"Status: {status}"
             ),
 
-            screening_id=screening_id,
         )
 
     except Exception as error:
@@ -3440,11 +1433,13 @@ async def screen_document(
             error,
         )
 
+
     # ========================================================
     # IDENTITY INTELLIGENCE
     # ========================================================
 
     identity_intelligence = None
+
 
     if identity_id:
 
@@ -3463,13 +1458,6 @@ async def screen_document(
                 error,
             )
 
-    # ========================================================
-    # ALL DATES
-    # ========================================================
-
-    dates_found = extract_dates(
-        text
-    )
 
     # ========================================================
     # FINAL RESPONSE
@@ -3477,8 +1465,7 @@ async def screen_document(
 
     return {
 
-        "success":
-            True,
+        "success": True,
 
         "screening_id":
             screening_id,
@@ -3516,22 +1503,8 @@ async def screen_document(
                 doc_number,
 
             "dates_found":
-                dates_found,
+                extract_dates(text),
 
-            "mrz":
-                mrz,
-
-            "visa":
-                visa_fields,
-
-            "visa_machine_data":
-                visa_machine,
-
-            "ocr_confidence":
-                ocr_confidence,
-
-            "raw_ocr_text":
-                text,
         },
 
         "visual_analysis":
@@ -3539,331 +1512,225 @@ async def screen_document(
 
         "identity_intelligence":
             identity_intelligence,
+
     }
 
 
 # ============================================================
-# DASHBOARD API
+# DASHBOARD API - POSTGRESQL
 # ============================================================
 
 @app.get("/api/dashboard")
 def get_dashboard():
 
-    from database import get_connection
-
-    conn = get_connection()
-
-    cursor = conn.cursor()
+    conn = None
 
     try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-        # ====================================================
-        # TOTAL SCREENINGS
-        # ====================================================
+        cursor.execute("SELECT COUNT(*) AS total FROM screenings")
+        total_screenings = cursor.fetchone()["total"] or 0
 
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM screenings
-            """
-        )
-
-        total_screenings = (
-            cursor.fetchone()["total"]
-        )
-
-        # ====================================================
-        # AVERAGE RISK SCORE
-        # ====================================================
-
-        cursor.execute(
-            """
-            SELECT AVG(risk_score) AS average
-            FROM screenings
-            """
-        )
-
-        result = cursor.fetchone()
-
+        cursor.execute("SELECT AVG(risk_score) AS average FROM screenings")
+        average_result = cursor.fetchone()
         average_risk_score = (
-
-            round(
-                result["average"],
-                1,
-            )
-
-            if result["average"]
-            is not None
-
+            round(float(average_result["average"]), 1)
+            if average_result["average"] is not None
             else 0
         )
 
-        # ====================================================
-        # CLEARED
-        # ====================================================
+        cursor.execute(
+            "SELECT COUNT(*) AS total FROM screenings WHERE status = %s",
+            ("LOW RISK",),
+        )
+        cleared_documents = cursor.fetchone()["total"] or 0
 
         cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM screenings
-            WHERE status = 'LOW RISK'
-            """
+            "SELECT COUNT(*) AS total FROM screenings WHERE status <> %s",
+            ("LOW RISK",),
         )
-
-        cleared_documents = (
-            cursor.fetchone()["total"]
-        )
-
-        # ====================================================
-        # FLAGGED
-        # ====================================================
+        flagged_documents = cursor.fetchone()["total"] or 0
 
         cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM screenings
-            WHERE status != 'LOW RISK'
-            """
+            "SELECT COUNT(*) AS total FROM screenings WHERE status = %s",
+            ("LOW RISK",),
         )
-
-        flagged_documents = (
-            cursor.fetchone()["total"]
-        )
-
-        # ====================================================
-        # LOW RISK
-        # ====================================================
+        low_risk = cursor.fetchone()["total"] or 0
 
         cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM screenings
-            WHERE status = 'LOW RISK'
-            """
+            "SELECT COUNT(*) AS total FROM screenings WHERE status = %s",
+            ("REVIEW REQUIRED",),
         )
-
-        low_risk = (
-            cursor.fetchone()["total"]
-        )
-
-        # ====================================================
-        # REVIEW REQUIRED
-        # ====================================================
+        review_required = cursor.fetchone()["total"] or 0
 
         cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM screenings
-            WHERE status = 'REVIEW REQUIRED'
-            """
+            "SELECT COUNT(*) AS total FROM screenings WHERE status = %s",
+            ("SUSPICIOUS",),
         )
-
-        review_required = (
-            cursor.fetchone()["total"]
-        )
-
-        # ====================================================
-        # SUSPICIOUS
-        # ====================================================
+        suspicious = cursor.fetchone()["total"] or 0
 
         cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM screenings
-            WHERE status = 'SUSPICIOUS'
-            """
+            "SELECT COUNT(*) AS total FROM screenings WHERE status = %s",
+            ("HIGH RISK",),
         )
+        high_risk = cursor.fetchone()["total"] or 0
 
-        suspicious = (
-            cursor.fetchone()["total"]
-        )
-
-        # ====================================================
-        # HIGH RISK
-        # ====================================================
-
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM screenings
-            WHERE status = 'HIGH RISK'
-            """
-        )
-
-        high_risk = (
-            cursor.fetchone()["total"]
-        )
-
-        # ====================================================
-        # RECENT SCREENINGS
-        # ====================================================
-
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT
-                id,
-                identity_id,
-                full_name,
-                document_number,
-                document_type,
-                risk_score,
-                status,
-                issues,
-                checkpoint,
-                officer_name,
-                created_at
+                id, identity_id, full_name, document_number, document_type,
+                risk_score, status, issues, checkpoint, officer_name, created_at
             FROM screenings
             ORDER BY id DESC
             LIMIT 10
-            """
-        )
+        """)
+        recent_screenings = [dict(row) for row in cursor.fetchall()]
 
-        recent_screenings = [
-
-            dict(row)
-
-            for row in cursor.fetchall()
-        ]
-
-        # ====================================================
-        # CHECKPOINT LOAD
-        # ====================================================
-
-        cursor.execute(
-            """
-            SELECT
-                checkpoint,
-                COUNT(*) AS total_screenings
+        cursor.execute("""
+            SELECT checkpoint, COUNT(*) AS total_screenings
             FROM screenings
             GROUP BY checkpoint
             ORDER BY total_screenings DESC
-            """
-        )
-
-        checkpoint_load = [
-
-            dict(row)
-
-            for row in cursor.fetchall()
-        ]
+        """)
+        checkpoint_load = [dict(row) for row in cursor.fetchall()]
 
         return {
-
-            "success":
-                True,
-
+            "success": True,
             "statistics": {
-
-                "screenings_today":
-                    total_screenings,
-
-                "average_risk_score":
-                    average_risk_score,
-
-                "cleared_documents":
-                    cleared_documents,
-
-                "flagged_for_review":
-                    flagged_documents,
+                "screenings_today": total_screenings,
+                "average_risk_score": average_risk_score,
+                "cleared_documents": cleared_documents,
+                "flagged_for_review": flagged_documents,
             },
-
-            "recent_screenings":
-                recent_screenings,
-
+            "recent_screenings": recent_screenings,
             "risk_distribution": {
-
-                "low_risk":
-                    low_risk,
-
-                "review_required":
-                    review_required,
-
-                "suspicious":
-                    suspicious,
-
-                "high_risk":
-                    high_risk,
+                "low_risk": low_risk,
+                "review_required": review_required,
+                "suspicious": suspicious,
+                "high_risk": high_risk,
             },
-
-            "checkpoint_load":
-                checkpoint_load,
+            "checkpoint_load": checkpoint_load,
         }
 
-    finally:
+    except Exception as error:
+        print("DASHBOARD DATABASE ERROR:", error)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Dashboard database error: {str(error)}",
+        )
 
-        conn.close()
+    finally:
+        if conn:
+            conn.close()
 
 
 # ============================================================
-# AUDIT CHAIN API (blockchain-style hash chain)
+# AUDIT LOG API - POSTGRESQL
 # ============================================================
 
 @app.get("/api/audit")
-def audit_log_api(limit: int = 50):
+def get_audit_logs(limit: int = 100):
+
+    limit = max(1, min(limit, 500))
+    conn = None
 
     try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-        logs = get_audit_chain(limit)
+        cursor.execute("""
+            SELECT id, officer_name, action, details, created_at
+            FROM audit_logs
+            ORDER BY id DESC
+            LIMIT %s
+        """, (limit,))
+
+        logs = [dict(row) for row in cursor.fetchall()]
 
         return {
-
             "success": True,
-
+            "count": len(logs),
             "audit_logs": logs,
         }
 
     except Exception as error:
-
+        print("AUDIT DATABASE ERROR:", error)
         raise HTTPException(
-
             status_code=500,
-
-            detail=str(error),
+            detail=f"Audit database error: {str(error)}",
         )
+
+    finally:
+        if conn:
+            conn.close()
 
 
 @app.get("/api/audit/verify")
-def audit_verify_api():
+def verify_audit_chain():
+    """
+    Verifies that the audit log can be read consistently from PostgreSQL.
+
+    The current database schema stores audit entries as normal records
+    (id/officer/action/details/created_at); it does not contain hash-chain
+    columns, so this endpoint does not claim cryptographic verification.
+    """
+
+    conn = None
 
     try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-        result = verify_audit_chain()
+        cursor.execute("""
+            SELECT id, officer_name, action, details, created_at
+            FROM audit_logs
+            ORDER BY id ASC
+        """)
+
+        logs = [dict(row) for row in cursor.fetchall()]
+
+        ids_are_sequential = all(
+            logs[i]["id"] < logs[i + 1]["id"]
+            for i in range(len(logs) - 1)
+        )
 
         return {
-
             "success": True,
-
-            **result,
+            "verified": True,
+            "cryptographic_hash_chain": False,
+            "message": (
+                "Audit records were read successfully from PostgreSQL. "
+                "The current schema does not include cryptographic hash fields."
+            ),
+            "total_records": len(logs),
+            "record_order_valid": ids_are_sequential,
         }
 
     except Exception as error:
-
+        print("AUDIT VERIFY ERROR:", error)
         raise HTTPException(
-
             status_code=500,
-
-            detail=str(error),
+            detail=f"Audit verification error: {str(error)}",
         )
+
+    finally:
+        if conn:
+            conn.close()
 
 
 # ============================================================
 # IDENTITY INTELLIGENCE API
 # ============================================================
 
-@app.get(
-    "/api/identity/{identity_id}"
-)
-def identity_intelligence(
-    identity_id: int,
-):
+@app.get("/api/identity/{identity_id}")
+def identity_intelligence(identity_id: int):
 
     try:
 
-        intelligence = (
-            get_identity_intelligence(
-                identity_id
-            )
+        intelligence = get_identity_intelligence(
+            identity_id
         )
+
 
         if not intelligence:
 
@@ -3872,20 +1739,24 @@ def identity_intelligence(
                 status_code=404,
 
                 detail="Identity not found",
+
             )
+
 
         return {
 
-            "success":
-                True,
+            "success": True,
 
             "identity_intelligence":
                 intelligence,
+
         }
+
 
     except HTTPException:
 
         raise
+
 
     except Exception as error:
 
@@ -3894,20 +1765,5 @@ def identity_intelligence(
             status_code=500,
 
             detail=str(error),
+
         )
-
-
-# ============================================================
-# LOCAL DEVELOPMENT
-# ============================================================
-
-if __name__ == "__main__":
-
-    import uvicorn
-
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-    )
