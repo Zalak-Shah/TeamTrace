@@ -561,7 +561,7 @@ a{
 
       <div>
         <div class="officer-name">R. Sharma</div>
-        <div class="officer-role">SSB Border Officer</div>
+        <div class="officer-role">Immigration officer</div>
       </div>
 
     </div>
@@ -962,7 +962,8 @@ style="display:none;"></div>
 /* CONFIGURATION */
 /* ============================================= */
 
-const API_URL = "https://teamtrace-backend.vercel.app/api/screen";;
+const API_URL = "/api/screen";
+
 /* ============================================= */
 /* VARIABLES */
 /* ============================================= */
@@ -1554,15 +1555,18 @@ async function startScreening(){
     }
 
 
-    /* Handle backend error */
-
     if(!response.ok){
-
       throw new Error(
         data.detail ||
         "The backend could not process this document."
       );
-
+    }
+    
+    if(data.success === false){
+      throw new Error(
+        data.message || data.error ||
+        "Screening failed."
+      );
     }
 
 
@@ -1682,16 +1686,10 @@ function showBackendError(message){
 /* ============================================= */
 
 function showResults(data){
-
-  document.getElementById("stage-scanning").style.display =
-    "none";
-
-
-  const results =
-    document.getElementById("stage-results");
-
-
-  results.style.display = "block";
+  try {
+    document.getElementById("stage-scanning").style.display = "none";
+    const results = document.getElementById("stage-results");
+    results.style.display = "block";
 
 
   /* ============================================= */
@@ -2502,6 +2500,10 @@ function showResults(data){
 
   `;
 
+  } catch(error) {
+    console.error("Error in showResults:", error);
+    showBackendError("Frontend Error rendering results: " + error.message);
+  }
 }
 
 </script>
