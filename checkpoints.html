@@ -165,7 +165,7 @@ function renderChrome({ active, title, subtitle }) {
         <div class="avatar">RS</div>
         <div>
           <div class="officer-name">R. Sharma</div>
-          <div class="officer-role">SSB Border Officer</div>
+          <div class="officer-role">Immigration officer</div>
         </div>
       </div>
     </div>`;
@@ -215,19 +215,19 @@ const DOC_TYPES = [
 ];
 
 const CHECKPOINTS = [
-  { id: "CP-01", name: "Raxaul SSB Border Outpost", location: "Bihar, IN (India-Nepal)", officers: 14, screeningsToday: 612, avgRisk: 18, status: "Operational" },
-  { id: "CP-02", name: "Sonauli SSB Border Outpost", location: "Uttar Pradesh, IN (India-Nepal)", officers: 22, screeningsToday: 1470, avgRisk: 14, status: "Operational" },
-  { id: "CP-03", name: "Jogbani SSB Border Outpost", location: "Bihar, IN (India-Nepal)", officers: 9, screeningsToday: 304, avgRisk: 27, status: "Elevated" },
-  { id: "CP-04", name: "Panitanki SSB Border Outpost", location: "West Bengal, IN (India-Nepal)", officers: 11, screeningsToday: 388, avgRisk: 16, status: "Operational" },
-  { id: "CP-05", name: "Jaigaon SSB Border Outpost", location: "West Bengal, IN (India-Bhutan)", officers: 8, screeningsToday: 196, avgRisk: 22, status: "Elevated" },
+  { id: "CP-01", name: "Attari-Wagah Land Border", location: "Punjab, IN", officers: 14, screeningsToday: 312, avgRisk: 18, status: "Operational" },
+  { id: "CP-02", name: "IGI Airport T3 — Immigration", location: "New Delhi, IN", officers: 41, screeningsToday: 2870, avgRisk: 12, status: "Operational" },
+  { id: "CP-03", name: "Petrapole Land Port", location: "West Bengal, IN", officers: 9, screeningsToday: 204, avgRisk: 27, status: "Elevated" },
+  { id: "CP-04", name: "CSMIA Mumbai — Terminal 2", location: "Mumbai, IN", officers: 36, screeningsToday: 2210, avgRisk: 15, status: "Operational" },
+  { id: "CP-05", name: "Moreh Land Border", location: "Manipur, IN", officers: 6, screeningsToday: 88, avgRisk: 34, status: "Elevated" },
 ];
 
 const OFFICERS = [
-  { id: "OF-101", name: "R. Sharma", role: "SSB Border Officer", checkpoint: "CP-02", screenings: 184, flags: 6 },
+  { id: "OF-101", name: "R. Sharma", role: "Immigration officer", checkpoint: "CP-02", screenings: 184, flags: 6 },
   { id: "OF-102", name: "A. Nair", role: "Senior officer", checkpoint: "CP-04", screenings: 231, flags: 11 },
-  { id: "OF-103", name: "K. Bano", role: "SSB Border Officer", checkpoint: "CP-01", screenings: 97, flags: 3 },
+  { id: "OF-103", name: "K. Bano", role: "Immigration officer", checkpoint: "CP-01", screenings: 97, flags: 3 },
   { id: "OF-104", name: "S. Reddy", role: "Fraud analyst", checkpoint: "CP-03", screenings: 60, flags: 19 },
-  { id: "OF-105", name: "T. Wangchuk", role: "SSB Border Officer", checkpoint: "CP-05", screenings: 42, flags: 8 },
+  { id: "OF-105", name: "T. Wangchuk", role: "Immigration officer", checkpoint: "CP-05", screenings: 42, flags: 8 },
 ];
 
 const TEMPLATES = [
@@ -249,10 +249,10 @@ const VALIDATION_RULES = [
 ];
 
 const FRAUD_CASES = [
-  { id: "FC-2201", title: "Repeated face match across 3 passport numbers", riskKey: "HIGH", status: "Under investigation", linked: 4, checkpoint: "Panitanki SSB Border Outpost", opened: "2026-09-03" },
-  { id: "FC-2198", title: "Photo substitution on Uzbek national ID", riskKey: "SUSPICIOUS", status: "Under investigation", linked: 1, checkpoint: "Jogbani SSB Border Outpost", opened: "2026-09-04" },
-  { id: "FC-2184", title: "Template mismatch — counterfeit driving licence ring", riskKey: "SUSPICIOUS", status: "Escalated", linked: 6, checkpoint: "Sonauli SSB Border Outpost", opened: "2026-08-29" },
-  { id: "FC-2170", title: "MRZ checksum fraud, forged student visa batch", riskKey: "HIGH", status: "Resolved", linked: 9, checkpoint: "Raxaul SSB Border Outpost", opened: "2026-08-20" },
+  { id: "FC-2201", title: "Repeated face match across 3 passport numbers", riskKey: "HIGH", status: "Under investigation", linked: 4, checkpoint: "Moreh Land Border", opened: "2026-09-03" },
+  { id: "FC-2198", title: "Photo substitution on Uzbek national ID", riskKey: "SUSPICIOUS", status: "Under investigation", linked: 1, checkpoint: "Petrapole Land Port", opened: "2026-09-04" },
+  { id: "FC-2184", title: "Template mismatch — counterfeit driving licence ring", riskKey: "SUSPICIOUS", status: "Escalated", linked: 6, checkpoint: "Attari-Wagah", opened: "2026-08-29" },
+  { id: "FC-2170", title: "MRZ checksum fraud, forged student visa batch", riskKey: "HIGH", status: "Resolved", linked: 9, checkpoint: "IGI Airport T3", opened: "2026-08-20" },
 ];
 
 const AUDIT_LOGS = [
@@ -265,14 +265,14 @@ const AUDIT_LOGS = [
 ];
 
 const HISTORY = [
-  { id: "SCR-4827", name: "Ananya Verma", documentType: "Passport", checkpoint: "Raxaul SSB Border Outpost", officer: "R. Sharma", date: "2026-09-05 06:12", riskKey: "VALID", score: 6, documentNumber: "P8827341" },
-  { id: "SCR-4826", name: "Wei Zhang", documentType: "Visa", checkpoint: "Jaigaon SSB Border Outpost", officer: "A. Nair", date: "2026-09-05 05:47", riskKey: "VALID", score: 9, documentNumber: "V0093321" },
-  { id: "SCR-4825", name: "Michael O'Connell", documentType: "National ID", checkpoint: "Sonauli SSB Border Outpost", officer: "K. Bano", date: "2026-09-04 22:03", riskKey: "MEDIUM", score: 46, documentNumber: "N4471029" },
-  { id: "SCR-4824", name: "Priya Menon", documentType: "Passport", checkpoint: "Raxaul SSB Border Outpost", officer: "R. Sharma", date: "2026-09-04 19:38", riskKey: "VALID", score: 11, documentNumber: "P2234871" },
-  { id: "SCR-4823", name: "Dilnoza Karimova", documentType: "Passport", checkpoint: "Jogbani SSB Border Outpost", officer: "S. Reddy", date: "2026-09-04 15:21", riskKey: "SUSPICIOUS", score: 74, documentNumber: "P9081123" },
-  { id: "SCR-4822", name: "Farid Al-Mansoori", documentType: "Passport", checkpoint: "Panitanki SSB Border Outpost", officer: "T. Wangchuk", date: "2026-09-03 11:05", riskKey: "HIGH", score: 93, documentNumber: "P5567201" },
-  { id: "SCR-4821", name: "Josef Novak", documentType: "Permit", checkpoint: "Jaigaon SSB Border Outpost", officer: "A. Nair", date: "2026-09-03 09:52", riskKey: "VALID", score: 8, documentNumber: "R7712340" },
-  { id: "SCR-4820", name: "Reeta Thapa", documentType: "Driving licence", checkpoint: "Sonauli SSB Border Outpost", officer: "K. Bano", date: "2026-09-02 14:16", riskKey: "MEDIUM", score: 38, documentNumber: "DL0093344" },
+  { id: "SCR-4827", name: "Ananya Verma", documentType: "Passport", checkpoint: "IGI Airport T3", officer: "R. Sharma", date: "2026-09-05 06:12", riskKey: "VALID", score: 6, documentNumber: "P8827341" },
+  { id: "SCR-4826", name: "Wei Zhang", documentType: "Visa", checkpoint: "CSMIA Mumbai — T2", officer: "A. Nair", date: "2026-09-05 05:47", riskKey: "VALID", score: 9, documentNumber: "V0093321" },
+  { id: "SCR-4825", name: "Michael O'Connell", documentType: "National ID", checkpoint: "Attari-Wagah", officer: "K. Bano", date: "2026-09-04 22:03", riskKey: "MEDIUM", score: 46, documentNumber: "N4471029" },
+  { id: "SCR-4824", name: "Priya Menon", documentType: "Passport", checkpoint: "IGI Airport T3", officer: "R. Sharma", date: "2026-09-04 19:38", riskKey: "VALID", score: 11, documentNumber: "P2234871" },
+  { id: "SCR-4823", name: "Dilnoza Karimova", documentType: "Passport", checkpoint: "Petrapole Land Port", officer: "S. Reddy", date: "2026-09-04 15:21", riskKey: "SUSPICIOUS", score: 74, documentNumber: "P9081123" },
+  { id: "SCR-4822", name: "Farid Al-Mansoori", documentType: "Passport", checkpoint: "Moreh Land Border", officer: "T. Wangchuk", date: "2026-09-03 11:05", riskKey: "HIGH", score: 93, documentNumber: "P5567201" },
+  { id: "SCR-4821", name: "Josef Novak", documentType: "Permit", checkpoint: "CSMIA Mumbai — T2", officer: "A. Nair", date: "2026-09-03 09:52", riskKey: "VALID", score: 8, documentNumber: "R7712340" },
+  { id: "SCR-4820", name: "Reeta Thapa", documentType: "Driving licence", checkpoint: "Attari-Wagah", officer: "K. Bano", date: "2026-09-02 14:16", riskKey: "MEDIUM", score: 38, documentNumber: "DL0093344" },
 ];
 
 const IDENTITY_NETWORK = {

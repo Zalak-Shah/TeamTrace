@@ -2,7 +2,7 @@ fastapi
 uvicorn[standard]
 python-multipart
 python-dotenv
+google-cloud-vision
 opencv-python-headless
-numpy
 requests
-psycopg2-binary
+pytesseract

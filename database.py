@@ -1,35 +1,9 @@
-"""
-============================================================
-BorderShield AI / TeamTrace
-PostgreSQL Database Layer
-============================================================
-
-This file replaces the old SQLite database.py.
-
-Required Vercel Environment Variable:
-DATABASE_URL = your Neon PostgreSQL connection string
-
-Do NOT put DATABASE_URL inside this file.
-Do NOT put DATABASE_URL on GitHub.
-============================================================
-"""
-
-import os
+import sqlite3
 import json
 from datetime import datetime
 
-import psycopg2
-import psycopg2.extras
-from dotenv import load_dotenv
 
-
-# ============================================================
-# ENVIRONMENT
-# ============================================================
-
-load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL")
+DB_NAME = "bordershield.db"
 
 
 # ============================================================
@@ -38,15 +12,11 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_connection():
 
-    if not DATABASE_URL:
-        raise RuntimeError(
-            "DATABASE_URL environment variable is not set."
-        )
+    conn = sqlite3.connect(DB_NAME)
 
-    return psycopg2.connect(
-        DATABASE_URL,
-        cursor_factory=psycopg2.extras.RealDictCursor
-    )
+    conn.row_factory = sqlite3.Row
+
+    return conn
 
 
 # ============================================================
@@ -56,146 +26,152 @@ def get_connection():
 def initialize_database():
 
     conn = get_connection()
+
     cursor = conn.cursor()
+
 
     # ========================================================
     # IDENTITIES TABLE
     # ========================================================
 
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS identities (
+    CREATE TABLE IF NOT EXISTS identities (
 
-            id SERIAL PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-            full_name TEXT,
+        full_name TEXT,
 
-            document_number TEXT UNIQUE,
+        document_number TEXT UNIQUE,
 
-            document_type TEXT,
+        document_type TEXT,
 
-            nationality TEXT,
+        nationality TEXT,
 
-            risk_level TEXT DEFAULT 'LOW',
+        risk_level TEXT DEFAULT 'LOW',
 
-            watchlist_flag INTEGER DEFAULT 0,
+        watchlist_flag INTEGER DEFAULT 0,
 
-            fraud_flag INTEGER DEFAULT 0,
+        fraud_flag INTEGER DEFAULT 0,
 
-            created_at TEXT
+        created_at TEXT
 
-        )
+    )
     """)
+
 
     # ========================================================
     # SCREENINGS TABLE
     # ========================================================
 
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS screenings (
+    CREATE TABLE IF NOT EXISTS screenings (
 
-            id SERIAL PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-            identity_id INTEGER,
+        identity_id INTEGER,
 
-            full_name TEXT,
+        full_name TEXT,
 
-            document_number TEXT,
+        document_number TEXT,
 
-            document_type TEXT,
+        document_type TEXT,
 
-            risk_score INTEGER,
+        risk_score INTEGER,
 
-            status TEXT,
+        status TEXT,
 
-            issues TEXT,
+        issues TEXT,
 
-            checkpoint TEXT,
+        checkpoint TEXT,
 
-            officer_name TEXT,
+        officer_name TEXT,
 
-            created_at TEXT,
+        created_at TEXT,
 
-            FOREIGN KEY(identity_id)
-                REFERENCES identities(id)
+        FOREIGN KEY(identity_id)
+        REFERENCES identities(id)
 
-        )
+    )
     """)
+
 
     # ========================================================
     # FRAUD CASES TABLE
     # ========================================================
 
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS fraud_cases (
+    CREATE TABLE IF NOT EXISTS fraud_cases (
 
-            id SERIAL PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-            identity_id INTEGER,
+        identity_id INTEGER,
 
-            document_number TEXT,
+        document_number TEXT,
 
-            case_type TEXT,
+        case_type TEXT,
 
-            severity TEXT,
+        severity TEXT,
 
-            description TEXT,
+        description TEXT,
 
-            status TEXT DEFAULT 'OPEN',
+        status TEXT DEFAULT 'OPEN',
 
-            created_at TEXT,
+        created_at TEXT,
 
-            FOREIGN KEY(identity_id)
-                REFERENCES identities(id)
+        FOREIGN KEY(identity_id)
+        REFERENCES identities(id)
 
-        )
+    )
     """)
+
 
     # ========================================================
     # CHECKPOINTS TABLE
     # ========================================================
 
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS checkpoints (
+    CREATE TABLE IF NOT EXISTS checkpoints (
 
-            id SERIAL PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-            checkpoint_name TEXT,
+        checkpoint_name TEXT,
 
-            location TEXT,
+        location TEXT,
 
-            status TEXT DEFAULT 'ACTIVE',
+        status TEXT DEFAULT 'ACTIVE',
 
-            last_activity TEXT
+        last_activity TEXT
 
-        )
+    )
     """)
+
 
     # ========================================================
     # AUDIT LOGS TABLE
     # ========================================================
 
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS audit_logs (
+    CREATE TABLE IF NOT EXISTS audit_logs (
 
-            id SERIAL PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-            officer_name TEXT,
+        officer_name TEXT,
 
-            action TEXT,
+        action TEXT,
 
-            details TEXT,
+        details TEXT,
 
-            created_at TEXT
+        created_at TEXT
 
-        )
+    )
     """)
+
 
     conn.commit()
 
-    cursor.close()
     conn.close()
 
-    print("BorderShield PostgreSQL database initialized successfully.")
+    print("BorderShield database initialized successfully.")
 
 
 # ============================================================
@@ -203,10 +179,12 @@ def initialize_database():
 # ============================================================
 
 def create_or_get_identity(
+
     full_name=None,
     document_number=None,
     document_type="Unknown",
     name=None
+
 ):
 
     # Allow main.py to use either name or full_name
@@ -214,77 +192,85 @@ def create_or_get_identity(
     if name and not full_name:
         full_name = name
 
+
     if not document_number:
+
         return None
 
+
     conn = get_connection()
+
     cursor = conn.cursor()
 
-    try:
 
-        # ----------------------------------------------------
-        # CHECK EXISTING IDENTITY
-        # ----------------------------------------------------
+    # Check existing identity
 
-        cursor.execute(
-            """
-            SELECT id
-            FROM identities
-            WHERE document_number = %s
-            """,
-            (document_number,)
-        )
+    cursor.execute("""
 
-        existing = cursor.fetchone()
+        SELECT id
 
-        if existing:
+        FROM identities
 
-            identity_id = existing["id"]
+        WHERE document_number = ?
 
-            return identity_id
+    """, (document_number,))
 
-        # ----------------------------------------------------
-        # CREATE NEW IDENTITY
-        # ----------------------------------------------------
 
-        created_at = datetime.now().isoformat()
+    existing = cursor.fetchone()
 
-        cursor.execute(
-            """
-            INSERT INTO identities (
-                full_name,
-                document_number,
-                document_type,
-                created_at
-            )
-            VALUES (%s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                full_name or "Unknown",
-                document_number,
-                document_type or "Unknown",
-                created_at
-            )
-        )
 
-        result = cursor.fetchone()
+    if existing:
 
-        identity_id = result["id"]
+        identity_id = existing["id"]
 
-        conn.commit()
+        conn.close()
 
         return identity_id
 
-    except Exception:
 
-        conn.rollback()
-        raise
+    # Create new identity
 
-    finally:
+    created_at = datetime.now().isoformat()
 
-        cursor.close()
-        conn.close()
+
+    cursor.execute("""
+
+        INSERT INTO identities (
+
+            full_name,
+
+            document_number,
+
+            document_type,
+
+            created_at
+
+        )
+
+        VALUES (?, ?, ?, ?)
+
+    """, (
+
+        full_name or "Unknown",
+
+        document_number,
+
+        document_type or "Unknown",
+
+        created_at
+
+    ))
+
+
+    identity_id = cursor.lastrowid
+
+
+    conn.commit()
+
+    conn.close()
+
+
+    return identity_id
 
 
 # ============================================================
@@ -292,82 +278,106 @@ def create_or_get_identity(
 # ============================================================
 
 def save_screening(
+
     identity_id=None,
+
     full_name="Unknown",
+
     document_number="Not detected",
+
     document_type="Unknown",
+
     risk_score=0,
+
     status="LOW RISK",
+
     issues=None,
+
     checkpoint="Main Border Checkpoint",
+
     officer_name="BorderShield AI"
+
 ):
 
+
     if issues is None:
+
         issues = []
 
+
     conn = get_connection()
+
     cursor = conn.cursor()
 
-    try:
 
-        created_at = datetime.now().isoformat()
+    created_at = datetime.now().isoformat()
 
-        issues_json = json.dumps(issues)
 
-        cursor.execute(
-            """
-            INSERT INTO screenings (
+    issues_json = json.dumps(issues)
 
-                identity_id,
-                full_name,
-                document_number,
-                document_type,
-                risk_score,
-                status,
-                issues,
-                checkpoint,
-                officer_name,
-                created_at
 
-            )
-            VALUES (
-                %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s
-            )
-            RETURNING id
-            """,
-            (
-                identity_id,
-                full_name or "Unknown",
-                document_number or "Not detected",
-                document_type or "Unknown",
-                int(risk_score or 0),
-                status or "LOW RISK",
-                issues_json,
-                checkpoint,
-                officer_name,
-                created_at
-            )
+    cursor.execute("""
+
+        INSERT INTO screenings (
+
+            identity_id,
+
+            full_name,
+
+            document_number,
+
+            document_type,
+
+            risk_score,
+
+            status,
+
+            issues,
+
+            checkpoint,
+
+            officer_name,
+
+            created_at
+
         )
 
-        result = cursor.fetchone()
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
-        screening_id = result["id"]
+    """, (
 
-        conn.commit()
+        identity_id,
 
-        return screening_id
+        full_name or "Unknown",
 
-    except Exception:
+        document_number or "Not detected",
 
-        conn.rollback()
-        raise
+        document_type,
 
-    finally:
+        risk_score,
 
-        cursor.close()
-        conn.close()
+        status,
+
+        issues_json,
+
+        checkpoint,
+
+        officer_name,
+
+        created_at
+
+    ))
+
+
+    screening_id = cursor.lastrowid
+
+
+    conn.commit()
+
+    conn.close()
+
+
+    return screening_id
 
 
 # ============================================================
@@ -376,158 +386,195 @@ def save_screening(
 
 def get_identity_intelligence(identity_id):
 
+
     if not identity_id:
+
         return None
 
+
     conn = get_connection()
+
     cursor = conn.cursor()
 
-    try:
 
-        # ----------------------------------------------------
-        # GET IDENTITY
-        # ----------------------------------------------------
+    # Get identity using ID
 
-        cursor.execute(
-            """
-            SELECT *
-            FROM identities
-            WHERE id = %s
-            """,
-            (identity_id,)
-        )
+    cursor.execute("""
 
-        identity = cursor.fetchone()
+        SELECT *
 
-        if not identity:
-            return None
+        FROM identities
 
-        identity = dict(identity)
+        WHERE id = ?
 
-        # ----------------------------------------------------
-        # GET SCREENING HISTORY
-        # ----------------------------------------------------
+    """, (identity_id,))
 
-        cursor.execute(
-            """
-            SELECT *
-            FROM screenings
-            WHERE identity_id = %s
-            ORDER BY created_at DESC
-            """,
-            (identity_id,)
-        )
 
-        screenings = [
-            dict(row)
-            for row in cursor.fetchall()
-        ]
+    identity = cursor.fetchone()
 
-        # ----------------------------------------------------
-        # GET FRAUD CASES
-        # ----------------------------------------------------
 
-        cursor.execute(
-            """
-            SELECT *
-            FROM fraud_cases
-            WHERE identity_id = %s
-            ORDER BY created_at DESC
-            """,
-            (identity_id,)
-        )
+    if not identity:
 
-        fraud_cases = [
-            dict(row)
-            for row in cursor.fetchall()
-        ]
-
-        # ----------------------------------------------------
-        # CALCULATE ALERTS
-        # ----------------------------------------------------
-
-        alerts = []
-
-        if identity.get("watchlist_flag"):
-
-            alerts.append(
-                "Identity matched a watchlist record"
-            )
-
-        if identity.get("fraud_flag"):
-
-            alerts.append(
-                "Identity has previous fraud activity"
-            )
-
-        suspicious_screenings = [
-
-            screening
-
-            for screening in screenings
-
-            if (screening.get("risk_score") or 0) >= 50
-
-        ]
-
-        if suspicious_screenings:
-
-            alerts.append(
-                f"{len(suspicious_screenings)} "
-                f"suspicious screening(s) found"
-            )
-
-        if fraud_cases:
-
-            alerts.append(
-                f"{len(fraud_cases)} "
-                f"fraud case(s) linked to this identity"
-            )
-
-        # ----------------------------------------------------
-        # DETERMINE RISK LEVEL
-        # ----------------------------------------------------
-
-        if identity.get("watchlist_flag"):
-
-            intelligence_risk = "HIGH"
-
-        elif identity.get("fraud_flag"):
-
-            intelligence_risk = "SUSPICIOUS"
-
-        elif suspicious_screenings:
-
-            intelligence_risk = "SUSPICIOUS"
-
-        elif len(screenings) > 1:
-
-            intelligence_risk = "REVIEW"
-
-        else:
-
-            intelligence_risk = "LOW"
-
-        return {
-
-            "identity": identity,
-
-            "screenings": screenings,
-
-            "fraud_cases": fraud_cases,
-
-            "alerts": alerts,
-
-            "risk_level": intelligence_risk,
-
-            "total_screenings": len(screenings)
-
-        }
-
-    finally:
-
-        cursor.close()
         conn.close()
+
+        return None
+
+
+    identity = dict(identity)
+
+
+    document_number = identity["document_number"]
+
+
+    # ========================================================
+    # GET SCREENING HISTORY
+    # ========================================================
+
+    cursor.execute("""
+
+        SELECT *
+
+        FROM screenings
+
+        WHERE identity_id = ?
+
+        ORDER BY created_at DESC
+
+    """, (identity_id,))
+
+
+    screenings = [
+
+        dict(row)
+
+        for row in cursor.fetchall()
+
+    ]
+
+
+    # ========================================================
+    # GET FRAUD CASES
+    # ========================================================
+
+    cursor.execute("""
+
+        SELECT *
+
+        FROM fraud_cases
+
+        WHERE identity_id = ?
+
+        ORDER BY created_at DESC
+
+    """, (identity_id,))
+
+
+    fraud_cases = [
+
+        dict(row)
+
+        for row in cursor.fetchall()
+
+    ]
+
+
+    conn.close()
+
+
+    # ========================================================
+    # CALCULATE ALERTS
+    # ========================================================
+
+    alerts = []
+
+
+    if identity["watchlist_flag"]:
+
+        alerts.append(
+            "Identity matched a watchlist record"
+        )
+
+
+    if identity["fraud_flag"]:
+
+        alerts.append(
+            "Identity has previous fraud activity"
+        )
+
+
+    suspicious_screenings = [
+
+        screening
+
+        for screening in screenings
+
+        if screening["risk_score"] >= 50
+
+    ]
+
+
+    if suspicious_screenings:
+
+        alerts.append(
+
+            f"{len(suspicious_screenings)} suspicious screening(s) found"
+
+        )
+
+
+    if fraud_cases:
+
+        alerts.append(
+
+            f"{len(fraud_cases)} fraud case(s) linked to this identity"
+
+        )
+
+
+    # ========================================================
+    # RISK LEVEL
+    # ========================================================
+
+    if identity["watchlist_flag"]:
+
+        intelligence_risk = "HIGH"
+
+
+    elif identity["fraud_flag"]:
+
+        intelligence_risk = "SUSPICIOUS"
+
+
+    elif suspicious_screenings:
+
+        intelligence_risk = "SUSPICIOUS"
+
+
+    elif len(screenings) > 1:
+
+        intelligence_risk = "REVIEW"
+
+
+    else:
+
+        intelligence_risk = "LOW"
+
+
+    return {
+
+        "identity": identity,
+
+        "screenings": screenings,
+
+        "fraud_cases": fraud_cases,
+
+        "alerts": alerts,
+
+        "risk_level": intelligence_risk,
+
+        "total_screenings": len(screenings)
+
+    }
 
 
 # ============================================================
@@ -535,120 +582,53 @@ def get_identity_intelligence(identity_id):
 # ============================================================
 
 def add_audit_log(
+
     action,
+
     details,
+
     officer_name="BorderShield AI"
+
 ):
 
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    try:
-
-        cursor.execute(
-            """
-            INSERT INTO audit_logs (
-                officer_name,
-                action,
-                details,
-                created_at
-            )
-            VALUES (%s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                officer_name,
-                action,
-                details,
-                datetime.now().isoformat()
-            )
-        )
-
-        result = cursor.fetchone()
-
-        audit_id = result["id"]
-
-        conn.commit()
-
-        return audit_id
-
-    except Exception:
-
-        conn.rollback()
-        raise
-
-    finally:
-
-        cursor.close()
-        conn.close()
-
-
-# ============================================================
-# GET AUDIT LOGS
-# ============================================================
-
-def get_audit_logs(limit=100):
 
     conn = get_connection()
+
     cursor = conn.cursor()
 
-    try:
 
-        cursor.execute(
-            """
-            SELECT *
-            FROM audit_logs
-            ORDER BY id DESC
-            LIMIT %s
-            """,
-            (limit,)
+    cursor.execute("""
+
+        INSERT INTO audit_logs (
+
+            officer_name,
+
+            action,
+
+            details,
+
+            created_at
+
         )
 
-        logs = [
-            dict(row)
-            for row in cursor.fetchall()
-        ]
+        VALUES (?, ?, ?, ?)
 
-        return logs
+    """, (
 
-    finally:
+        officer_name,
 
-        cursor.close()
-        conn.close()
+        action,
+
+        details,
+
+        datetime.now().isoformat()
+
+    ))
 
 
-# ============================================================
-# GET ALL SCREENINGS
-# ============================================================
+    conn.commit()
 
-def get_all_screenings(limit=100):
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    try:
-
-        cursor.execute(
-            """
-            SELECT *
-            FROM screenings
-            ORDER BY id DESC
-            LIMIT %s
-            """,
-            (limit,)
-        )
-
-        screenings = [
-            dict(row)
-            for row in cursor.fetchall()
-        ]
-
-        return screenings
-
-    finally:
-
-        cursor.close()
-        conn.close()
+    conn.close()
 
 
 # ============================================================
@@ -658,216 +638,113 @@ def get_all_screenings(limit=100):
 def get_dashboard_data():
 
     conn = get_connection()
+
     cursor = conn.cursor()
 
-    try:
 
-        # ----------------------------------------------------
-        # TOTAL SCREENINGS
-        # ----------------------------------------------------
+    # Total screenings
 
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM screenings
-            """
-        )
+    cursor.execute("""
 
-        row = cursor.fetchone()
+        SELECT COUNT(*) AS total
 
-        total_screenings = int(row["total"] or 0)
+        FROM screenings
 
-        # ----------------------------------------------------
-        # AVERAGE RISK
-        # ----------------------------------------------------
+    """)
 
-        cursor.execute(
-            """
-            SELECT AVG(risk_score) AS average
-            FROM screenings
-            """
-        )
 
-        row = cursor.fetchone()
+    total_screenings = cursor.fetchone()["total"]
 
-        average = row["average"]
 
-        if average is not None:
-            average = float(average)
-        else:
-            average = 0.0
+    # Average risk
 
-        # ----------------------------------------------------
-        # CLEARED
-        # ----------------------------------------------------
+    cursor.execute("""
 
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM screenings
-            WHERE status = 'LOW RISK'
-            """
-        )
+        SELECT AVG(risk_score) AS average
 
-        row = cursor.fetchone()
+        FROM screenings
 
-        cleared = int(row["total"] or 0)
+    """)
 
-        # ----------------------------------------------------
-        # FLAGGED
-        # ----------------------------------------------------
 
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS total
-            FROM screenings
-            WHERE status != 'LOW RISK'
-            """
-        )
+    average = cursor.fetchone()["average"]
 
-        row = cursor.fetchone()
 
-        flagged = int(row["total"] or 0)
+    # Cleared
 
-        # ----------------------------------------------------
-        # RECENT SCREENINGS
-        # ----------------------------------------------------
+    cursor.execute("""
 
-        cursor.execute(
-            """
-            SELECT *
-            FROM screenings
-            ORDER BY id DESC
-            LIMIT 10
-            """
-        )
+        SELECT COUNT(*) AS total
 
-        recent_screenings = [
-            dict(row)
-            for row in cursor.fetchall()
-        ]
+        FROM screenings
 
-        return {
+        WHERE status = 'LOW RISK'
 
-            "success": True,
+    """)
 
-            "statistics": {
 
-                "screenings_today": total_screenings,
+    cleared = cursor.fetchone()["total"]
 
-                "average_risk_score": round(
-                    average,
-                    1
-                ),
 
-                "cleared_documents": cleared,
+    # Flagged
 
-                "flagged_for_review": flagged
+    cursor.execute("""
 
-            },
+        SELECT COUNT(*) AS total
 
-            "recent_screenings": recent_screenings
+        FROM screenings
 
-        }
+        WHERE status != 'LOW RISK'
 
-    finally:
+    """)
 
-        cursor.close()
-        conn.close()
 
+    flagged = cursor.fetchone()["total"]
 
-# ============================================================
-# DATABASE HEALTH CHECK
-# ============================================================
 
-def check_database_connection():
+    # Recent screenings
 
-    conn = None
-    cursor = None
+    cursor.execute("""
 
-    try:
+        SELECT *
 
-        conn = get_connection()
+        FROM screenings
 
-        cursor = conn.cursor()
+        ORDER BY id DESC
 
-        cursor.execute(
-            "SELECT 1 AS test"
-        )
+        LIMIT 10
 
-        result = cursor.fetchone()
+    """)
 
-        if result and result["test"] == 1:
 
-            return {
+    recent_screenings = [
 
-                "success": True,
+        dict(row)
 
-                "database": "PostgreSQL",
+        for row in cursor.fetchall()
 
-                "connected": True
+    ]
 
-            }
 
-        return {
+    conn.close()
 
-            "success": False,
 
-            "database": "PostgreSQL",
+    return {
 
-            "connected": False,
+        "success": True,
 
-            "error": "Database test query failed"
+        "statistics": {
 
-        }
+            "screenings_today": total_screenings,
 
-    except Exception as e:
+            "average_risk_score": round(average, 1) if average else 0,
 
-        return {
+            "cleared_documents": cleared,
 
-            "success": False,
+            "flagged_for_review": flagged
 
-            "database": "PostgreSQL",
+        },
 
-            "connected": False,
+        "recent_screenings": recent_screenings
 
-            "error": str(e)
-
-        }
-
-    finally:
-
-        if cursor:
-            cursor.close()
-
-        if conn:
-            conn.close()
-
-
-# ============================================================
-# TEST WHEN RUN DIRECTLY
-# ============================================================
-
-if __name__ == "__main__":
-
-    try:
-
-        initialize_database()
-
-        result = check_database_connection()
-
-        print(json.dumps(result, indent=2, default=str))
-
-    except Exception as e:
-
-        print(
-            json.dumps(
-                {
-                    "success": False,
-                    "database": "PostgreSQL",
-                    "connected": False,
-                    "error": str(e)
-                },
-                indent=2
-            )
-        )
+    }
