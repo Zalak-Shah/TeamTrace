@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -962,7 +963,7 @@ style="display:none;"></div>
 /* CONFIGURATION */
 /* ============================================= */
 
-const API_URL = "/api/screen";
+const API_URL = (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") && window.location.port !== "3000" ? "http://127.0.0.1:8000/api/screen" : "/api/screen";
 
 /* ============================================= */
 /* VARIABLES */
@@ -1540,24 +1541,23 @@ async function startScreening(){
     });
 
 
-    const data = await response.json();
-
+    let data;
+    try {
+      data = await response.json();
+    } catch (e) {
+      throw new Error(`Server returned an invalid response (Status: ${response.status}). The API might be down or misconfigured.`);
+    }
 
     clearInterval(animation);
 
-
     /* Mark all steps completed */
-
     for(let i = 0; i < STEPS.length; i++){
-
       updateStep(i, "done");
-
     }
-
 
     if(!response.ok){
       throw new Error(
-        data.detail ||
+        data?.detail || data?.error ||
         "The backend could not process this document."
       );
     }
