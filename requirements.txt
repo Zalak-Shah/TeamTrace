@@ -6,4 +6,4 @@ google-cloud-vision
 opencv-python-headless
 requests
 pytesseract
-psycopg2-binary
+
