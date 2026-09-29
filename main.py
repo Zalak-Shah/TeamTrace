@@ -71,7 +71,7 @@ ALLOWED_CONTENT_TYPES = {
     "application/pdf",
 }
 
-MAX_FILE_SIZE_MB = 10
+MAX_FILE_SIZE_MB = 4
 
 
 # ============================================================
@@ -1017,6 +1017,10 @@ def health():
 # ============================================================
 # SCREEN DOCUMENT
 # ============================================================
+
+@app.get("/api/ping")
+def ping():
+    return {"status": "ok", "message": "API is reachable!"}
 
 @app.post("/api/screen")
 async def screen_document(
