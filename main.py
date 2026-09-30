@@ -1,13 +1,14 @@
 """
 ============================================================
 TeamTrace / BorderShield AI - Backend
-OCR.space + OpenCV + SQLite Identity Intelligence
+OCR.space + OpenCV + Postgres (Neon) Identity Intelligence
++ Blockchain-style hash-chain audit trail
 ============================================================
 """
 
 import os
 import re
-import sqlite3
+import time
 from datetime import date, datetime
 from typing import Optional
 
@@ -25,6 +26,9 @@ from database import (
     save_screening,
     get_identity_intelligence,
     add_audit_log,
+    get_audit_chain,
+    verify_audit_chain,
+    get_connection,
 )
 
 
@@ -42,7 +46,7 @@ if not OCR_SPACE_API_KEY:
 
 app = FastAPI(
     title="BorderShield AI Backend",
-    version="1.0.0",
+    version="2.1.0",
 )
 
 initialize_database()
@@ -71,7 +75,7 @@ ALLOWED_CONTENT_TYPES = {
     "application/pdf",
 }
 
-MAX_FILE_SIZE_MB = 4
+MAX_FILE_SIZE_MB = 10
 
 
 # ============================================================
@@ -91,23 +95,18 @@ WEIGHTS = {
 def severity_for_weight(weight: int) -> str:
     if weight >= 25:
         return "HIGH"
-
     if weight >= 10:
         return "MEDIUM"
-
     return "LOW"
 
 
 def status_for_score(score: int) -> str:
     if score <= 20:
         return "LOW RISK"
-
     if score <= 50:
         return "REVIEW REQUIRED"
-
     if score <= 75:
         return "SUSPICIOUS"
-
     return "HIGH RISK"
 
 
@@ -115,25 +114,10 @@ def status_for_score(score: int) -> str:
 # DOCUMENT NUMBER PATTERNS
 # ============================================================
 
-AADHAAR_NUMBER_RE = re.compile(
-    r"\b\d{4}\s?\d{4}\s?\d{4}\b"
-)
-
-PAN_NUMBER_RE = re.compile(
-    r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
-    re.IGNORECASE,
-)
-
-PASSPORT_NUMBER_RE = re.compile(
-    r"\b[A-Z][0-9]{7}\b",
-    re.IGNORECASE,
-)
-
-DL_NUMBER_RE = re.compile(
-    r"\b[A-Z]{2}[-\s]?\d{2}[-\s]?\d{4,11}\b",
-    re.IGNORECASE,
-)
-
+AADHAAR_NUMBER_RE = re.compile(r"\b\d{4}[ ]?\d{4}[ ]?\d{4}\b")
+PAN_NUMBER_RE = re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", re.IGNORECASE)
+PASSPORT_NUMBER_RE = re.compile(r"\b[A-Z][0-9]{7}\b", re.IGNORECASE)
+DL_NUMBER_RE = re.compile(r"\b[A-Z]{2}[-\s]?\d{2}[-\s]?\d{4,11}\b", re.IGNORECASE)
 DATE_RE = re.compile(
     r"\b("
     r"\d{2}[/-]\d{2}[/-]\d{4}"
@@ -148,20 +132,17 @@ DATE_RE = re.compile(
 # ============================================================
 
 KEYWORDS = {
-
     "Aadhaar": [
         "unique identification authority",
         "aadhaar",
         "uidai",
         "government of india",
     ],
-
     "PAN Card": [
         "income tax department",
         "permanent account number",
         "pan card",
     ],
-
     "Passport": [
         "passport",
         "republic of india",
@@ -172,7 +153,6 @@ KEYWORDS = {
         "date of issue",
         "date of expiry",
     ],
-
     "Visa": [
         "visa",
         "visa number",
@@ -182,14 +162,12 @@ KEYWORDS = {
         "entries",
         "visa type",
     ],
-
     "National ID": [
         "national identity",
         "identity card",
         "national id",
         "identification card",
     ],
-
     "Driving Licence": [
         "driving licence",
         "driving license",
@@ -198,7 +176,6 @@ KEYWORDS = {
         "license no",
         "dl no",
     ],
-
     "Permit": [
         "permit",
         "validity",
@@ -214,25 +191,14 @@ KEYWORDS = {
 # ============================================================
 
 def to_date(value: Optional[str]) -> Optional[date]:
-
     if not value:
         return None
 
-    formats = [
-        "%d/%m/%Y",
-        "%d-%m-%Y",
-        "%Y-%m-%d",
-        "%Y/%m/%d",
-    ]
+    formats = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%Y/%m/%d"]
 
     for fmt in formats:
-
         try:
-            return datetime.strptime(
-                value,
-                fmt,
-            ).date()
-
+            return datetime.strptime(value, fmt).date()
         except ValueError:
             continue
 
@@ -244,69 +210,39 @@ def to_date(value: Optional[str]) -> Optional[date]:
 # ============================================================
 
 def classify_document(text: str) -> str:
-
     lower = text.lower()
-
     scores = {}
 
     for doc_type, keywords in KEYWORDS.items():
-
         score = 0
-
         for keyword in keywords:
-
             if keyword in lower:
                 score += 1
-
         scores[doc_type] = score
 
-
-    if (
-        AADHAAR_NUMBER_RE.search(text)
-        and scores.get("Aadhaar", 0) > 0
-    ):
+    if AADHAAR_NUMBER_RE.search(text) and scores.get("Aadhaar", 0) > 0:
         return "Aadhaar"
 
-
     if PAN_NUMBER_RE.search(text):
-
-        if (
-            scores.get("PAN Card", 0) > 0
-            or "income tax" in lower
-        ):
+        if scores.get("PAN Card", 0) > 0 or "income tax" in lower:
             return "PAN Card"
 
-
-    if (
-        PASSPORT_NUMBER_RE.search(text)
-        and scores.get("Passport", 0) >= 2
-    ):
+    if PASSPORT_NUMBER_RE.search(text) and scores.get("Passport", 0) >= 2:
         return "Passport"
-
 
     if scores.get("Visa", 0) >= 2:
         return "Visa"
 
-
-    if (
-        DL_NUMBER_RE.search(text)
-        and scores.get("Driving Licence", 0) > 0
-    ):
+    if DL_NUMBER_RE.search(text) and scores.get("Driving Licence", 0) > 0:
         return "Driving Licence"
-
 
     if scores.get("National ID", 0) >= 1:
         return "National ID"
 
-
     if scores.get("Permit", 0) >= 2:
         return "Permit"
 
-
-    best = max(
-        scores,
-        key=scores.get,
-    )
+    best = max(scores, key=scores.get)
 
     if scores[best] > 0:
         return best
@@ -315,50 +251,79 @@ def classify_document(text: str) -> str:
 
 
 # ============================================================
+# MRZ PARSER
+# ============================================================
+
+def parse_mrz(text: str):
+    text_clean = text.replace(" ", "")
+    lines = text_clean.splitlines()
+
+    for i, line in enumerate(lines):
+        if line.startswith("P<") and len(line) >= 30:
+            mrz_name = None
+            parts = line[5:].split("<<")
+
+            if len(parts) >= 2:
+                surname = parts[0].replace("<", "")
+                given = parts[1].replace("<", " ").strip()
+                mrz_name = f"{given} {surname}".strip()
+
+            if i + 1 < len(lines):
+                line2 = lines[i + 1]
+
+                if len(line2) >= 28:
+                    doc_num = line2[0:9].replace("<", "")
+                    dob_str = line2[13:19]
+                    exp_str = line2[21:27]
+                    dates = []
+
+                    if dob_str.isdigit() and len(dob_str) == 6:
+                        y = int(dob_str[0:2])
+                        y_full = 1900 + y if y > 30 else 2000 + y
+                        dates.append(f"{dob_str[4:6]}/{dob_str[2:4]}/{y_full}")
+
+                    if exp_str.isdigit() and len(exp_str) == 6:
+                        y = int(exp_str[0:2])
+                        dates.append(f"{exp_str[4:6]}/{exp_str[2:4]}/20{y:02d}")
+
+                    return {
+                        "name": mrz_name or "Unknown",
+                        "doc_number": doc_num,
+                        "dates": dates,
+                    }
+
+    return None
+
+
+# ============================================================
 # EXTRACT DOCUMENT NUMBER
 # ============================================================
 
-def extract_document_number(
-    text: str,
-    doc_type: str,
-) -> Optional[str]:
-
+def extract_document_number(text: str, doc_type: str) -> Optional[str]:
     if doc_type == "Passport":
         mrz = parse_mrz(text)
         if mrz and mrz.get("doc_number"):
             return mrz["doc_number"]
 
     if doc_type == "Aadhaar":
-
         match = AADHAAR_NUMBER_RE.search(text)
-
         if match:
             return match.group(0).replace(" ", "")
 
-
     elif doc_type == "PAN Card":
-
         match = PAN_NUMBER_RE.search(text)
-
         if match:
             return match.group(0).upper()
-
 
     elif doc_type == "Passport":
-
         match = PASSPORT_NUMBER_RE.search(text)
-
         if match:
             return match.group(0).upper()
-
 
     elif doc_type == "Driving Licence":
-
         match = DL_NUMBER_RE.search(text)
-
         if match:
             return match.group(0).upper()
-
 
     return None
 
@@ -384,276 +349,96 @@ def guess_name(text: str) -> Optional[str]:
         return mrz["name"]
 
     skip_words = {
-
-        "GOVERNMENT",
-        "INDIA",
-        "REPUBLIC",
-        "INCOME",
-        "TAX",
-        "DEPARTMENT",
-        "UNIQUE",
-        "IDENTIFICATION",
-        "AUTHORITY",
-        "TRANSPORT",
-        "LICENCE",
-        "LICENSE",
-        "AADHAAR",
-        "PASSPORT",
-        "NATIONALITY",
-        "VISA",
-        "PERMIT",
-        "VALID",
-        "EXPIRY",
-        "SURNAME",
-        "GIVEN",
-        "NAME",
-
+        "GOVERNMENT", "INDIA", "REPUBLIC", "INCOME", "TAX", "DEPARTMENT",
+        "UNIQUE", "IDENTIFICATION", "AUTHORITY", "TRANSPORT", "LICENCE",
+        "LICENSE", "AADHAAR", "PASSPORT", "NATIONALITY", "VISA", "PERMIT",
+        "VALID", "EXPIRY", "SURNAME", "GIVEN", "NAME",
     }
 
-
     for line in text.splitlines():
-
         clean = line.strip()
 
         if not clean:
             continue
 
-        if (
-            4 <= len(clean) <= 50
-            and re.fullmatch(
-                r"[A-Za-z][A-Za-z .'-]+",
-                clean,
-            )
-        ):
-
-            words = {
-                word.upper()
-                for word in clean.split()
-            }
+        if 4 <= len(clean) <= 50 and re.fullmatch(r"[A-Za-z][A-Za-z .'-]+", clean):
+            words = {word.upper() for word in clean.split()}
 
             if not (words & skip_words):
-
                 if len(words) <= 5:
                     return clean
 
     return None
 
-# ============================================================
-# MRZ PARSER
-# ============================================================
-
-def parse_mrz(text: str):
-    text_clean = text.replace(" ", "")
-    lines = text_clean.splitlines()
-    for i, line in enumerate(lines):
-        if line.startswith("P<") and len(line) >= 30:
-            mrz_name = None
-            parts = line[5:].split("<<")
-            if len(parts) >= 2:
-                surname = parts[0].replace("<", "")
-                given = parts[1].replace("<", " ").strip()
-                mrz_name = f"{given} {surname}".strip()
-            
-            if i + 1 < len(lines):
-                line2 = lines[i+1]
-                if len(line2) >= 28:
-                    doc_num = line2[0:9].replace("<", "")
-                    dob_str = line2[13:19]
-                    exp_str = line2[21:27]
-                    dates = []
-                    if dob_str.isdigit() and len(dob_str) == 6:
-                        y = int(dob_str[0:2])
-                        y_full = 1900 + y if y > 30 else 2000 + y
-                        dates.append(f"{dob_str[4:6]}/{dob_str[2:4]}/{y_full}")
-                    if exp_str.isdigit() and len(exp_str) == 6:
-                        y = int(exp_str[0:2])
-                        dates.append(f"{exp_str[4:6]}/{exp_str[2:4]}/20{y:02d}")
-                        
-                    return {
-                        "name": mrz_name or "Unknown",
-                        "doc_number": doc_num,
-                        "dates": dates
-                    }
-    return None
 
 # ============================================================
 # VISUAL ANALYSIS
 # ============================================================
 
 def analyze_document_image(file_bytes: bytes):
-
     result = {
-
         "is_image": False,
-
         "width": None,
-
         "height": None,
-
         "aspect_ratio": None,
-
         "blur_score": None,
-
         "brightness": None,
-
         "contrast": None,
-
         "quality_score": 100,
-
         "visual_issues": [],
-
         "visual_checks": [],
-
     }
 
-
-    image_array = np.frombuffer(
-        file_bytes,
-        dtype=np.uint8,
-    )
-
-
-    image = cv2.imdecode(
-        image_array,
-        cv2.IMREAD_COLOR,
-    )
-
+    image_array = np.frombuffer(file_bytes, dtype=np.uint8)
+    image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
 
     if image is None:
-
-        result["visual_checks"].append(
-            "Visual analysis skipped for non-image document"
-        )
-
+        result["visual_checks"].append("Visual analysis skipped for non-image document")
         result["quality_score"] = 80
-
         return result
 
-
     result["is_image"] = True
-
-
     height, width = image.shape[:2]
-
     result["width"] = width
     result["height"] = height
-
-    result["aspect_ratio"] = round(
-        width / height,
-        3,
-    )
-
-
-    # Resolution
+    result["aspect_ratio"] = round(width / height, 3)
 
     if width < 500 or height < 500:
-
-        result["visual_issues"].append(
-            "Low image resolution"
-        )
-
+        result["visual_issues"].append("Low image resolution")
     else:
+        result["visual_checks"].append("Image resolution is sufficient")
 
-        result["visual_checks"].append(
-            "Image resolution is sufficient"
-        )
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-
-    gray = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2GRAY,
-    )
-
-
-    # Blur
-
-    blur_score = cv2.Laplacian(
-        gray,
-        cv2.CV_64F,
-    ).var()
-
-    result["blur_score"] = round(
-        float(blur_score),
-        2,
-    )
-
+    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+    result["blur_score"] = round(float(blur_score), 2)
 
     if blur_score < 50:
-
-        result["visual_issues"].append(
-            "Image appears blurry"
-        )
-
+        result["visual_issues"].append("Image appears blurry")
     else:
-
-        result["visual_checks"].append(
-            "Image sharpness is acceptable"
-        )
-
-
-    # Brightness
+        result["visual_checks"].append("Image sharpness is acceptable")
 
     brightness = float(np.mean(gray))
-
-    result["brightness"] = round(
-        brightness,
-        2,
-    )
-
+    result["brightness"] = round(brightness, 2)
 
     if brightness < 40:
-
-        result["visual_issues"].append(
-            "Image is too dark"
-        )
-
+        result["visual_issues"].append("Image is too dark")
     elif brightness > 230:
-
-        result["visual_issues"].append(
-            "Image is excessively bright"
-        )
-
+        result["visual_issues"].append("Image is excessively bright")
     else:
-
-        result["visual_checks"].append(
-            "Image brightness is acceptable"
-        )
-
-
-    # Contrast
+        result["visual_checks"].append("Image brightness is acceptable")
 
     contrast = float(np.std(gray))
-
-    result["contrast"] = round(
-        contrast,
-        2,
-    )
-
+    result["contrast"] = round(contrast, 2)
 
     if contrast < 20:
-
-        result["visual_issues"].append(
-            "Image has very low contrast"
-        )
-
+        result["visual_issues"].append("Image has very low contrast")
     else:
-
-        result["visual_checks"].append(
-            "Image contrast is acceptable"
-        )
-
+        result["visual_checks"].append("Image contrast is acceptable")
 
     quality_score = 100
-
-    quality_score -= (
-        len(result["visual_issues"]) * 15
-    )
-
-    result["quality_score"] = max(
-        0,
-        quality_score,
-    )
-
+    quality_score -= (len(result["visual_issues"]) * 15)
+    result["quality_score"] = max(0, quality_score)
 
     return result
 
@@ -662,241 +447,108 @@ def analyze_document_image(file_bytes: bytes):
 # VALIDATION
 # ============================================================
 
-def run_validation(
-    doc_type: str,
-    text: str,
-    ocr_confidence: float,
-):
-
+def run_validation(doc_type: str, text: str, ocr_confidence: float):
     issues = []
     verified = []
     score = 0
 
-
     # NAME
-
     name = guess_name(text)
 
     if name:
-
-        verified.append(
-            "A likely name was detected"
-        )
-
+        verified.append("A likely name was detected")
     else:
-
         issues.append({
-
             "title": "Required field missing",
-
-            "severity": severity_for_weight(
-                WEIGHTS["MISSING_REQUIRED_FIELD"]
-            ),
-
-            "description":
-                "Could not locate a likely name on the document.",
-
+            "severity": severity_for_weight(WEIGHTS["MISSING_REQUIRED_FIELD"]),
+            "description": "Could not locate a likely name on the document.",
         })
-
-        score += WEIGHTS[
-            "MISSING_REQUIRED_FIELD"
-        ]
-
+        score += WEIGHTS["MISSING_REQUIRED_FIELD"]
 
     # DOCUMENT NUMBER
-
-    doc_number = extract_document_number(
-        text,
-        doc_type,
-    )
-
+    doc_number = extract_document_number(text, doc_type)
 
     if doc_number:
-
-        verified.append(
-            f"{doc_type} number format looks valid"
-        )
-
-    elif doc_type in (
-
-        "Aadhaar",
-        "PAN Card",
-        "Passport",
-        "Driving Licence",
-
-    ):
-
+        verified.append(f"{doc_type} number format looks valid")
+    elif doc_type in ("Aadhaar", "PAN Card", "Passport", "Driving Licence"):
         issues.append({
-
-            "title":
-                "Invalid or missing document number",
-
-            "severity":
-                severity_for_weight(
-                    WEIGHTS["INVALID_NUMBER_FORMAT"]
-                ),
-
-            "description":
-                f"No valid {doc_type} number pattern was found.",
-
+            "title": "Invalid or missing document number",
+            "severity": severity_for_weight(WEIGHTS["INVALID_NUMBER_FORMAT"]),
+            "description": f"No valid {doc_type} number pattern was found.",
         })
-
-        score += WEIGHTS[
-            "INVALID_NUMBER_FORMAT"
-        ]
-
+        score += WEIGHTS["INVALID_NUMBER_FORMAT"]
 
     # DATES
-
     dates_found = extract_dates(text)
 
     if not dates_found:
-
         issues.append({
-
             "title": "Required field missing",
-
-            "severity":
-                severity_for_weight(
-                    WEIGHTS["MISSING_REQUIRED_FIELD"]
-                ),
-
-            "description":
-                "No date could be extracted from the document.",
-
+            "severity": severity_for_weight(WEIGHTS["MISSING_REQUIRED_FIELD"]),
+            "description": "No date could be extracted from the document.",
         })
-
-        score += WEIGHTS[
-            "MISSING_REQUIRED_FIELD"
-        ]
-
+        score += WEIGHTS["MISSING_REQUIRED_FIELD"]
     else:
+        verified.append("Date information was extracted")
 
-        verified.append(
-            "Date information was extracted"
-        )
-
-
-        if doc_type in (
-
-            "Passport",
-            "Visa",
-            "Driving Licence",
-            "Permit",
-
-        ):
-
+        if doc_type in ("Passport", "Visa", "Driving Licence", "Permit"):
             parsed_dates = []
 
             for value in dates_found:
-
                 parsed = to_date(value)
-
                 if parsed:
                     parsed_dates.append(parsed)
 
-
             if parsed_dates:
-
                 latest_date = max(parsed_dates)
 
                 if latest_date < date.today():
-
                     issues.append({
-
-                        "title":
-                            "Possible expired document",
-
-                        "severity":
-                            "MEDIUM",
-
-                        "description":
-                            "The latest detected date appears to have expired.",
-
+                        "title": "Possible expired document",
+                        "severity": "MEDIUM",
+                        "description": "The latest detected date appears to have expired.",
                     })
-
-                    score += WEIGHTS[
-                        "EXPIRED_DOCUMENT"
-                    ]
-
+                    score += WEIGHTS["EXPIRED_DOCUMENT"]
                 else:
-
-                    verified.append(
-                        "Latest detected date is not expired"
-                    )
-
+                    verified.append("Latest detected date is not expired")
 
     # OCR CONFIDENCE
-
     if ocr_confidence < 0.60:
-
         issues.append({
-
-            "title":
-                "Low OCR confidence",
-
-            "severity":
-                "MEDIUM",
-
-            "description":
-                "OCR quality appears low.",
-
+            "title": "Low OCR confidence",
+            "severity": "MEDIUM",
+            "description": "OCR quality appears low.",
         })
-
-        score += WEIGHTS[
-            "LOW_OCR_CONFIDENCE"
-        ]
-
+        score += WEIGHTS["LOW_OCR_CONFIDENCE"]
     else:
-
-        verified.append(
-            "OCR extraction completed successfully"
-        )
-
+        verified.append("OCR extraction completed successfully")
 
     # UNKNOWN DOCUMENT
-
     if doc_type == "Unknown":
-
         issues.append({
-
-            "title":
-                "Document type could not be identified",
-
-            "severity":
-                "HIGH",
-
-            "description":
-                "No supported document pattern was confidently detected.",
-
+            "title": "Document type could not be identified",
+            "severity": "HIGH",
+            "description": "No supported document pattern was confidently detected.",
         })
+        score += WEIGHTS["CRITICAL_MISMATCH"]
 
-        score += WEIGHTS[
-            "CRITICAL_MISMATCH"
-        ]
-
-
-    return (
-        issues,
-        verified,
-        score,
-        name,
-        doc_number,
-    )
+    return (issues, verified, score, name, doc_number)
 
 
 # ============================================================
-# OCR.SPACE
+# OCR PREPROCESSING
 # ============================================================
 
 def preprocess_image_for_ocr(file_bytes: bytes) -> bytes:
     image_array = np.frombuffer(file_bytes, dtype=np.uint8)
     image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+
     if image is None:
         return file_bytes
 
     h, w = image.shape[:2]
     max_dim = 2000
+
     if max(h, w) > max_dim:
         scale = max_dim / max(h, w)
         image = cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
@@ -906,17 +558,19 @@ def preprocess_image_for_ocr(file_bytes: bytes) -> bytes:
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
 
-    success, encoded_img = cv2.imencode('.png', gray)
+    success, encoded_img = cv2.imencode(".png", gray)
+
     if success:
         return encoded_img.tobytes()
+
     return file_bytes
 
-import time
 
-def perform_ocr(
-    file_bytes: bytes,
-    filename: str,
-) -> str:
+# ============================================================
+# OCR.SPACE (with retry + local fallback)
+# ============================================================
+
+def perform_ocr(file_bytes: bytes, filename: str) -> str:
     if OCR_SPACE_API_KEY:
         url = "https://api.ocr.space/parse/image"
         files = {"file": (filename, file_bytes)}
@@ -926,57 +580,57 @@ def perform_ocr(
             "isOverlayRequired": "false",
             "OCREngine": "2",
         }
-        
-        max_retries = 1
+
+        max_retries = 2
         base_delay = 1
+
         for attempt in range(max_retries):
             try:
-                response = requests.post(url, files=files, data=data, timeout=10)
-                if response.status_code in [429, 500, 502, 503, 504]:
+                response = requests.post(url, files=files, data=data, timeout=20)
+
+                if response.status_code in (429, 500, 502, 503, 504):
                     print(f"OCR.space temporary error {response.status_code}. Retrying...")
                     time.sleep(base_delay)
                     continue
+
                 response.raise_for_status()
                 result = response.json()
+
                 if result.get("IsErroredOnProcessing"):
                     print(f"OCR.space processing error: {result.get('ErrorMessage')}")
                     break
-                
+
                 parsed_results = result.get("ParsedResults", [])
+
                 if parsed_results:
                     return "\n".join(item.get("ParsedText", "") for item in parsed_results)
+
                 return ""
+
             except requests.exceptions.RequestException as e:
                 print(f"OCR.space network error on attempt {attempt + 1}: {e}")
                 time.sleep(base_delay * (2 ** attempt))
-                
-    print("Falling back to local OCR (pytesseract)...")
+
+    # Local fallback (only works if pytesseract + tesseract binary are available
+    # in this environment - harmless no-op on Vercel where they are not)
+    print("Falling back to local OCR (pytesseract) if available...")
+
     try:
         import pytesseract
-        if os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe"):
-            pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-            
+
         image_array = np.frombuffer(file_bytes, dtype=np.uint8)
         img = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+
         if img is not None:
             text = pytesseract.image_to_string(img)
-            return text
+            if text.strip():
+                return text
+
     except Exception as e:
-        print(f"Local OCR fallback failed: {e}")
-        
-    print("MOCKING OCR RESPONSE BECAUSE ALL OCR ENGINES FAILED")
-    return (
-        "REPUBLIC OF INDIA PASSPORT\n"
-        "Surname: DOE\n"
-        "Given Name: JOHN\n"
-        "JOHN DOE\n"
-        "Nationality: INDIAN\n"
-        "DOB: 01/01/1980\n"
-        "Place of Birth: DELHI\n"
-        "Date of Issue: 12/12/2020\n"
-        "Date of Expiry: 12/12/2030\n"
-        "A1234567"
-    )
+        print(f"Local OCR fallback unavailable: {e}")
+
+    return ""
+
 
 # ============================================================
 # ROOT
@@ -984,16 +638,7 @@ def perform_ocr(
 
 @app.get("/")
 def root():
-
-    return {
-
-        "message":
-            "BorderShield AI Backend is Running!",
-
-        "status":
-            "ONLINE",
-
-    }
+    return {"message": "BorderShield AI Backend is Running!", "status": "ONLINE"}
 
 
 # ============================================================
@@ -1002,528 +647,214 @@ def root():
 
 @app.get("/api/health")
 def health():
+    return {"success": True, "status": "ONLINE", "service": "BorderShield AI"}
 
-    return {
 
-        "success": True,
-
-        "status": "ONLINE",
-
-        "service": "BorderShield AI",
-
-    }
+@app.get("/api/ping")
+def ping():
+    return {"status": "ok", "message": "API is reachable!"}
 
 
 # ============================================================
 # SCREEN DOCUMENT
 # ============================================================
 
-@app.get("/api/ping")
-def ping():
-    return {"status": "ok", "message": "API is reachable!"}
-
 @app.post("/api/screen")
 async def screen_document(
-
     file: UploadFile = File(...),
-
     expected_document_type: str = Form(...),
-
 ):
-
-
     # FILE TYPE
-
     if file.content_type not in ALLOWED_CONTENT_TYPES:
-
-        raise HTTPException(
-
-            status_code=400,
-
-            detail=f"Unsupported file type: {file.content_type}",
-
-        )
-
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {file.content_type}")
 
     # READ FILE
-
     file_bytes = await file.read()
 
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     # FILE SIZE
-
-    size_mb = len(file_bytes) / (
-        1024 * 1024
-    )
-
+    size_mb = len(file_bytes) / (1024 * 1024)
 
     if size_mb > MAX_FILE_SIZE_MB:
-
         raise HTTPException(
-
             status_code=400,
-
-            detail=(
-                f"File too large ({size_mb:.1f} MB). "
-                f"Maximum is {MAX_FILE_SIZE_MB} MB."
-            ),
-
+            detail=f"File too large ({size_mb:.1f} MB). Maximum is {MAX_FILE_SIZE_MB} MB.",
         )
-
 
     # VISUAL ANALYSIS
+    visual_analysis = analyze_document_image(file_bytes)
 
-    visual_analysis = analyze_document_image(
-        file_bytes
-    )
-
-
-    # PREPROCESS
+    # PREPROCESS + OCR
     processed_bytes = preprocess_image_for_ocr(file_bytes)
+    text = perform_ocr(processed_bytes, file.filename or "document")
 
-    # OCR
-    try:
-        text = perform_ocr(
-            processed_bytes,
-            file.filename or "document",
-        )
-    except Exception as e:
-        if str(e) == "OCR_FAILED":
-            return {
-                "success": False,
-                "error": "OCR temporarily unavailable",
-                "message": "The document could not be processed at this time. Please try again."
-            }
-        raise    # NO TEXT
-
+    # NO TEXT
     if not text.strip():
-
         score = 80
-
         status = status_for_score(score)
-
-        issues = [
-
-            {
-
-                "title":
-                    "No text detected",
-
-                "severity":
-                    "HIGH",
-
-                "description":
-                    "No readable text could be extracted.",
-
-            }
-
-        ]
+        issues = [{
+            "title": "No text detected",
+            "severity": "HIGH",
+            "description": "No readable text could be extracted.",
+        }]
 
         screening_id = None
 
-
         try:
-
             screening_id = save_screening(
-
                 identity_id=None,
-
                 full_name="Unknown",
-
                 document_number="Not detected",
-
                 document_type="Unknown",
-
                 risk_score=score,
-
                 status=status,
-
                 issues=issues,
-
-                checkpoint="Main Border Checkpoint",
-
+                checkpoint="SSB Border Outpost - Raxaul",
                 officer_name="BorderShield AI",
-
             )
-
-            print(
-                f"SCREENING SAVED SUCCESSFULLY! "
-                f"ID = {screening_id}"
-            )
-
+            print(f"SCREENING SAVED SUCCESSFULLY! ID = {screening_id}")
         except Exception as error:
-
-            print(
-                "DATABASE SAVE ERROR:",
-                error,
-            )
-
+            print("DATABASE SAVE ERROR:", error)
 
         return {
-
             "success": True,
-
-            "screening_id":
-                screening_id,
-
-            "document_type":
-                "Unknown",
-
-            "risk_score":
-                score,
-
-            "status":
-                status,
-
-            "issues":
-                issues,
-
-            "visual_analysis":
-                visual_analysis,
-
+            "screening_id": screening_id,
+            "document_type": "Unknown",
+            "risk_score": score,
+            "status": status,
+            "issues": issues,
+            "visual_analysis": visual_analysis,
         }
 
-
-    # OCR CONFIDENCE
-
-    ocr_confidence = 0.85
-
+    # OCR CONFIDENCE (simple heuristic)
+    ocr_confidence = 0.85 if len(text.strip()) > 50 else 0.55
 
     # DOCUMENT TYPE
-
     doc_type = classify_document(text)
 
-
-    # NORMALIZATION
-
+    # NORMALIZATION - Aadhaar counts as India's National ID equivalent
     aliases = {
-
-        "driving license":
-            "driving licence",
-
-        "driving licence":
-            "driving licence",
-
-        "passport":
-            "passport",
-
-        "visa":
-            "visa",
-
-        "national id":
-            "national id",
-
-        "permit":
-            "permit",
-
-        "aadhaar":
-            "aadhaar",
-
-        "pan card":
-            "pan card",
-
+        "driving license": "driving licence",
+        "driving licence": "driving licence",
+        "passport": "passport",
+        "visa": "visa",
+        "national id": "national id",
+        "permit": "permit",
+        "aadhaar": "national id",
+        "pan card": "pan card",
     }
-
 
     expected = expected_document_type.strip().lower()
-
     detected = doc_type.strip().lower()
 
-
-    expected_normalized = aliases.get(
-        expected,
-        expected,
-    )
-
-
-    detected_normalized = aliases.get(
-        detected,
-        detected,
-    )
-
+    expected_normalized = aliases.get(expected, expected)
+    detected_normalized = aliases.get(detected, detected)
 
     # VALIDATION
-
-    (
-
-        issues,
-
-        verified,
-
-        score,
-
-        name,
-
-        doc_number,
-
-    ) = run_validation(
-
-        doc_type,
-
-        text,
-
-        ocr_confidence,
-
-    )
-
+    (issues, verified, score, name, doc_number) = run_validation(doc_type, text, ocr_confidence)
 
     # TYPE MISMATCH
-
     if expected_normalized != detected_normalized:
-
         issues.append({
-
-            "title":
-                "Document Type Mismatch",
-
-            "severity":
-                "HIGH",
-
-            "description":
-                f"Expected '{expected_document_type}', "
-                f"but detected '{doc_type}'.",
-
+            "title": "Document Type Mismatch",
+            "severity": "HIGH",
+            "description": f"Expected '{expected_document_type}', but detected '{doc_type}'.",
         })
-
-        score += WEIGHTS[
-            "CRITICAL_MISMATCH"
-        ]
-
+        score += WEIGHTS["CRITICAL_MISMATCH"]
     else:
-
-        verified.append(
-            f"Correct document type confirmed: "
-            f"{expected_document_type}"
-        )
-
+        if doc_type == "Aadhaar":
+            verified.append("Correct document type confirmed: National ID (Aadhaar Card - India)")
+        else:
+            verified.append(f"Correct document type confirmed: {expected_document_type}")
 
     # VISUAL ISSUES
-
     for visual_issue in visual_analysis["visual_issues"]:
-
         issues.append({
-
-            "title":
-                "Visual Document Issue",
-
-            "severity":
-                "MEDIUM",
-
-            "description":
-                visual_issue,
-
+            "title": "Visual Document Issue",
+            "severity": "MEDIUM",
+            "description": visual_issue,
         })
-
-        score += WEIGHTS[
-            "VISUAL_ISSUE"
-        ]
-
-
-    # VISUAL CHECKS
+        score += WEIGHTS["VISUAL_ISSUE"]
 
     for visual_check in visual_analysis["visual_checks"]:
-
-        verified.append(
-            f"Visual check: {visual_check}"
-        )
-
+        verified.append(f"Visual check: {visual_check}")
 
     # LIMIT SCORE
-
-    score = max(
-        0,
-        min(100, score),
-    )
-
-
+    score = max(0, min(100, score))
     status = status_for_score(score)
 
-
-    # ========================================================
     # CREATE IDENTITY
-    # ========================================================
-
     identity_id = None
 
-
     try:
-
         if doc_number:
-
-            identity_id = create_or_get_identity(
-
-                full_name=name or "Unknown",
-
-                document_number=doc_number,
-
-            )
-
+            identity_id = create_or_get_identity(full_name=name or "Unknown", document_number=doc_number)
     except Exception as error:
+        print("DATABASE IDENTITY ERROR:", error)
 
-        print(
-            "DATABASE IDENTITY ERROR:",
-            error,
-        )
-
-
-    # ========================================================
     # SAVE SCREENING
-    # ========================================================
-
     screening_id = None
 
-
     try:
-
         screening_id = save_screening(
-
             identity_id=identity_id,
-
             full_name=name or "Unknown",
-
             document_number=doc_number or "Not detected",
-
             document_type=doc_type,
-
             risk_score=score,
-
             status=status,
-
             issues=issues,
-
-            checkpoint="Main Border Checkpoint",
-
+            checkpoint="SSB Border Outpost - Raxaul",
             officer_name="BorderShield AI",
-
         )
-
-
-        print(
-            f"SCREENING SAVED SUCCESSFULLY! "
-            f"ID = {screening_id}"
-        )
-
-
+        print(f"SCREENING SAVED SUCCESSFULLY! ID = {screening_id}")
     except Exception as error:
+        print("DATABASE SAVE ERROR:", error)
 
-        print(
-            "DATABASE SAVE ERROR:",
-            error,
-        )
-
-
-    # ========================================================
-    # AUDIT LOG
-    # ========================================================
-
+    # AUDIT LOG (hash-chained)
     try:
-
         add_audit_log(
-
             action="SCREENING_COMPLETED",
-
             details=(
-                f"Screening ID: {screening_id}, "
-                f"Document: {doc_type}, "
-                f"Risk Score: {score}, "
-                f"Status: {status}"
+                f"Screening ID: {screening_id}, Document: {doc_type}, "
+                f"Risk Score: {score}, Status: {status}"
             ),
-
+            screening_id=screening_id,
         )
-
     except Exception as error:
+        print("AUDIT LOG ERROR:", error)
 
-        print(
-            "AUDIT LOG ERROR:",
-            error,
-        )
-
-
-    # ========================================================
     # IDENTITY INTELLIGENCE
-    # ========================================================
-
     identity_intelligence = None
 
-
     if identity_id:
-
         try:
-
-            identity_intelligence = (
-                get_identity_intelligence(
-                    identity_id
-                )
-            )
-
+            identity_intelligence = get_identity_intelligence(identity_id)
         except Exception as error:
-
-            print(
-                "IDENTITY INTELLIGENCE ERROR:",
-                error,
-            )
-
-
-    # ========================================================
-    # FINAL RESPONSE
-    # ========================================================
+            print("IDENTITY INTELLIGENCE ERROR:", error)
 
     return {
-
         "success": True,
-
-        "screening_id":
-            screening_id,
-
-        "identity_id":
-            identity_id,
-
-        "document_type":
-            doc_type,
-
-        "expected_document_type":
-            expected_document_type,
-
-        "risk_score":
-            score,
-
-        "status":
-            status,
-
-        "message":
-            "Document received and analyzed successfully.",
-
-        "issues":
-            issues,
-
-        "verified_checks":
-            verified,
-
+        "screening_id": screening_id,
+        "identity_id": identity_id,
+        "document_type": doc_type,
+        "expected_document_type": expected_document_type,
+        "risk_score": score,
+        "status": status,
+        "message": "Document received and analyzed successfully.",
+        "issues": issues,
+        "verified_checks": verified,
         "extracted_fields": {
-
-            "name_guess":
-                name,
-
-            "document_number":
-                doc_number,
-
-            "dates_found":
-                extract_dates(text),
-
+            "name_guess": name,
+            "document_number": doc_number,
+            "dates_found": extract_dates(text),
         },
-
-        "visual_analysis":
-            visual_analysis,
-
-        "identity_intelligence":
-            identity_intelligence,
-
+        "visual_analysis": visual_analysis,
+        "identity_intelligence": identity_intelligence,
     }
 
-
-# ============================================================
-# DASHBOARD API
-# ============================================================
 
 # ============================================================
 # DASHBOARD API
@@ -1531,216 +862,93 @@ async def screen_document(
 
 @app.get("/api/dashboard")
 def get_dashboard():
-
-    import sqlite3
-
-    conn = sqlite3.connect("bordershield.db")
-    conn.row_factory = sqlite3.Row
-
+    conn = get_connection()
     cursor = conn.cursor()
 
-
-    # ========================================================
-    # TOTAL SCREENINGS
-    # ========================================================
-
-    cursor.execute("""
-        SELECT COUNT(*) AS total
-        FROM screenings
-    """)
-
+    cursor.execute("SELECT COUNT(*) AS total FROM screenings")
     total_screenings = cursor.fetchone()["total"]
 
-
-    # ========================================================
-    # AVERAGE RISK SCORE
-    # ========================================================
-
-    cursor.execute("""
-        SELECT AVG(risk_score) AS average
-        FROM screenings
-    """)
-
+    cursor.execute("SELECT AVG(risk_score) AS average FROM screenings")
     result = cursor.fetchone()
+    average_risk_score = round(float(result["average"]), 1) if result["average"] is not None else 0
 
-    average_risk_score = (
-        round(result["average"], 1)
-        if result["average"] is not None
-        else 0
-    )
-
-
-    # ========================================================
-    # CLEARED DOCUMENTS
-    # ========================================================
-
-    cursor.execute("""
-        SELECT COUNT(*) AS total
-        FROM screenings
-        WHERE status = 'LOW RISK'
-    """)
-
+    cursor.execute("SELECT COUNT(*) AS total FROM screenings WHERE status = 'LOW RISK'")
     cleared_documents = cursor.fetchone()["total"]
 
-
-    # ========================================================
-    # FLAGGED DOCUMENTS
-    # ========================================================
-
-    cursor.execute("""
-        SELECT COUNT(*) AS total
-        FROM screenings
-        WHERE status != 'LOW RISK'
-    """)
-
+    cursor.execute("SELECT COUNT(*) AS total FROM screenings WHERE status != 'LOW RISK'")
     flagged_documents = cursor.fetchone()["total"]
 
-
-    # ========================================================
-    # LOW RISK
-    # ========================================================
-
-    cursor.execute("""
-        SELECT COUNT(*) AS total
-        FROM screenings
-        WHERE status = 'LOW RISK'
-    """)
-
+    cursor.execute("SELECT COUNT(*) AS total FROM screenings WHERE status = 'LOW RISK'")
     low_risk = cursor.fetchone()["total"]
 
-
-    # ========================================================
-    # REVIEW REQUIRED
-    # ========================================================
-
-    cursor.execute("""
-        SELECT COUNT(*) AS total
-        FROM screenings
-        WHERE status = 'REVIEW REQUIRED'
-    """)
-
+    cursor.execute("SELECT COUNT(*) AS total FROM screenings WHERE status = 'REVIEW REQUIRED'")
     review_required = cursor.fetchone()["total"]
 
-
-    # ========================================================
-    # SUSPICIOUS
-    # ========================================================
-
-    cursor.execute("""
-        SELECT COUNT(*) AS total
-        FROM screenings
-        WHERE status = 'SUSPICIOUS'
-    """)
-
+    cursor.execute("SELECT COUNT(*) AS total FROM screenings WHERE status = 'SUSPICIOUS'")
     suspicious = cursor.fetchone()["total"]
 
-
-    # ========================================================
-    # HIGH RISK
-    # ========================================================
-
-    cursor.execute("""
-        SELECT COUNT(*) AS total
-        FROM screenings
-        WHERE status = 'HIGH RISK'
-    """)
-
+    cursor.execute("SELECT COUNT(*) AS total FROM screenings WHERE status = 'HIGH RISK'")
     high_risk = cursor.fetchone()["total"]
 
-
-    # ========================================================
-    # RECENT SCREENINGS
-    # ========================================================
-
     cursor.execute("""
-        SELECT
-            id,
-            identity_id,
-            full_name,
-            document_number,
-            document_type,
-            risk_score,
-            status,
-            issues,
-            checkpoint,
-            officer_name,
-            created_at
+        SELECT id, identity_id, full_name, document_number, document_type,
+               risk_score, status, issues, checkpoint, officer_name, created_at
         FROM screenings
         ORDER BY id DESC
         LIMIT 10
     """)
-
-    recent_screenings = [
-
-        dict(row)
-
-        for row in cursor.fetchall()
-
-    ]
-
-
-    # ========================================================
-    # CHECKPOINT LOAD
-    # ========================================================
+    recent_screenings = [dict(row) for row in cursor.fetchall()]
 
     cursor.execute("""
-        SELECT
-            checkpoint,
-            COUNT(*) AS total_screenings
+        SELECT checkpoint, COUNT(*) AS total_screenings
         FROM screenings
         GROUP BY checkpoint
         ORDER BY total_screenings DESC
     """)
+    checkpoint_load = [dict(row) for row in cursor.fetchall()]
 
-    checkpoint_load = [
-
-        dict(row)
-
-        for row in cursor.fetchall()
-
-    ]
-
-
+    cursor.close()
     conn.close()
 
-
-    # ========================================================
-    # FINAL RESPONSE
-    # ========================================================
-
     return {
-
         "success": True,
-
         "statistics": {
-
             "screenings_today": total_screenings,
-
             "average_risk_score": average_risk_score,
-
             "cleared_documents": cleared_documents,
-
-            "flagged_for_review": flagged_documents
-
+            "flagged_for_review": flagged_documents,
         },
-
         "recent_screenings": recent_screenings,
-
         "risk_distribution": {
-
             "low_risk": low_risk,
-
             "review_required": review_required,
-
             "suspicious": suspicious,
-
-            "high_risk": high_risk
-
+            "high_risk": high_risk,
         },
-
-        "checkpoint_load": checkpoint_load
-
+        "checkpoint_load": checkpoint_load,
     }
+
+
+# ============================================================
+# AUDIT CHAIN API (blockchain-style hash chain)
+# ============================================================
+
+@app.get("/api/audit")
+def audit_log_api(limit: int = 50):
+    try:
+        logs = get_audit_chain(limit)
+        return {"success": True, "audit_logs": logs}
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error))
+
+
+@app.get("/api/audit/verify")
+def audit_verify_api():
+    try:
+        result = verify_audit_chain()
+        return {"success": True, **result}
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 # ============================================================
@@ -1749,46 +957,15 @@ def get_dashboard():
 
 @app.get("/api/identity/{identity_id}")
 def identity_intelligence(identity_id: int):
-
     try:
-
-        intelligence = get_identity_intelligence(
-            identity_id
-        )
-
+        intelligence = get_identity_intelligence(identity_id)
 
         if not intelligence:
+            raise HTTPException(status_code=404, detail="Identity not found")
 
-            raise HTTPException(
-
-                status_code=404,
-
-                detail="Identity not found",
-
-            )
-
-
-        return {
-
-            "success": True,
-
-            "identity_intelligence":
-                intelligence,
-
-        }
-
+        return {"success": True, "identity_intelligence": intelligence}
 
     except HTTPException:
-
         raise
-
-
     except Exception as error:
-
-        raise HTTPException(
-
-            status_code=500,
-
-            detail=str(error),
-
-        )
+        raise HTTPException(status_code=500, detail=str(error))

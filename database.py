@@ -1,20 +1,63 @@
-import sqlite3
+import os
 import json
+import hashlib
 from datetime import datetime
 
+import psycopg2
+import psycopg2.extras
 
-DB_NAME = "bordershield.db"
+# ============================================================
+# BLOCKCHAIN-STYLE HASH CHAIN
+# ============================================================
+# Every audit log record stores a SHA-256 hash of its own data
+# PLUS the hash of the record directly before it (like a
+# blockchain block referencing the previous block's hash).
+#
+# If any past record is edited or deleted, its hash changes,
+# which breaks every hash chained after it - making tampering
+# mathematically detectable. This is the core data structure
+# blockchains are built on, applied here as a lightweight,
+# self-hosted, tamper-evident audit trail (no external network,
+# wallet, or gas fees required).
+# ============================================================
+
+GENESIS_HASH = "0" * 64
+
+
+def compute_block_hash(prev_hash, officer_name, action, details, created_at, screening_id):
+
+    payload = f"{prev_hash}|{officer_name}|{action}|{details}|{created_at}|{screening_id}"
+
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 # ============================================================
-# DATABASE CONNECTION
+# DATABASE CONNECTION (Postgres / Neon)
 # ============================================================
+# DATABASE_URL comes from an environment variable - never hardcode
+# a connection string. Locally, put it in a .env file (already
+# loaded by main.py's load_dotenv()). On Vercel, set it under
+# Project Settings -> Environment Variables. Neon's connection
+# string already includes ?sslmode=require, so no extra SSL setup
+# is needed here.
+# ============================================================
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 
 def get_connection():
 
-    conn = sqlite3.connect(DB_NAME)
+    if not DATABASE_URL:
 
-    conn.row_factory = sqlite3.Row
+        raise RuntimeError(
+            "DATABASE_URL is not set. Add your Neon connection string "
+            "to .env locally, and to Vercel's Environment Variables in production."
+        )
+
+    conn = psycopg2.connect(
+        DATABASE_URL,
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    )
 
     return conn
 
@@ -37,7 +80,7 @@ def initialize_database():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS identities (
 
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
 
         full_name TEXT,
 
@@ -66,7 +109,7 @@ def initialize_database():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS screenings (
 
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
 
         identity_id INTEGER,
 
@@ -102,7 +145,7 @@ def initialize_database():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS fraud_cases (
 
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
 
         identity_id INTEGER,
 
@@ -132,7 +175,7 @@ def initialize_database():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS checkpoints (
 
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
 
         checkpoint_name TEXT,
 
@@ -153,7 +196,7 @@ def initialize_database():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS audit_logs (
 
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
 
         officer_name TEXT,
 
@@ -161,17 +204,50 @@ def initialize_database():
 
         details TEXT,
 
-        created_at TEXT
+        created_at TEXT,
+
+        screening_id INTEGER,
+
+        hash TEXT,
+
+        prev_hash TEXT
 
     )
     """)
 
+    # --------------------------------------------------------
+    # Safe migration: add chain columns if this table already
+    # existed before the hash-chain feature was introduced.
+    # --------------------------------------------------------
+
+    cursor.execute("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'audit_logs'
+    """)
+
+    existing_columns = {row["column_name"] for row in cursor.fetchall()}
+
+    for column, col_type in (
+        ("screening_id", "INTEGER"),
+        ("hash", "TEXT"),
+        ("prev_hash", "TEXT"),
+    ):
+
+        if column not in existing_columns:
+
+            cursor.execute(
+                f"ALTER TABLE audit_logs ADD COLUMN {column} {col_type}"
+            )
+
 
     conn.commit()
 
+    cursor.close()
+
     conn.close()
 
-    print("BorderShield database initialized successfully.")
+    print("BorderShield database (Postgres) initialized successfully.")
 
 
 # ============================================================
@@ -211,7 +287,7 @@ def create_or_get_identity(
 
         FROM identities
 
-        WHERE document_number = ?
+        WHERE document_number = %s
 
     """, (document_number,))
 
@@ -222,6 +298,8 @@ def create_or_get_identity(
     if existing:
 
         identity_id = existing["id"]
+
+        cursor.close()
 
         conn.close()
 
@@ -247,7 +325,9 @@ def create_or_get_identity(
 
         )
 
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
+
+        RETURNING id
 
     """, (
 
@@ -262,10 +342,12 @@ def create_or_get_identity(
     ))
 
 
-    identity_id = cursor.lastrowid
+    identity_id = cursor.fetchone()["id"]
 
 
     conn.commit()
+
+    cursor.close()
 
     conn.close()
 
@@ -293,7 +375,7 @@ def save_screening(
 
     issues=None,
 
-    checkpoint="Main Border Checkpoint",
+    checkpoint="SSB Border Outpost - Raxaul",
 
     officer_name="BorderShield AI"
 
@@ -342,7 +424,9 @@ def save_screening(
 
         )
 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+
+        RETURNING id
 
     """, (
 
@@ -369,10 +453,12 @@ def save_screening(
     ))
 
 
-    screening_id = cursor.lastrowid
+    screening_id = cursor.fetchone()["id"]
 
 
     conn.commit()
+
+    cursor.close()
 
     conn.close()
 
@@ -405,7 +491,7 @@ def get_identity_intelligence(identity_id):
 
         FROM identities
 
-        WHERE id = ?
+        WHERE id = %s
 
     """, (identity_id,))
 
@@ -414,6 +500,8 @@ def get_identity_intelligence(identity_id):
 
 
     if not identity:
+
+        cursor.close()
 
         conn.close()
 
@@ -436,7 +524,7 @@ def get_identity_intelligence(identity_id):
 
         FROM screenings
 
-        WHERE identity_id = ?
+        WHERE identity_id = %s
 
         ORDER BY created_at DESC
 
@@ -462,7 +550,7 @@ def get_identity_intelligence(identity_id):
 
         FROM fraud_cases
 
-        WHERE identity_id = ?
+        WHERE identity_id = %s
 
         ORDER BY created_at DESC
 
@@ -477,6 +565,8 @@ def get_identity_intelligence(identity_id):
 
     ]
 
+
+    cursor.close()
 
     conn.close()
 
@@ -587,7 +677,9 @@ def add_audit_log(
 
     details,
 
-    officer_name="BorderShield AI"
+    officer_name="BorderShield AI",
+
+    screening_id=None
 
 ):
 
@@ -595,6 +687,53 @@ def add_audit_log(
     conn = get_connection()
 
     cursor = conn.cursor()
+
+    created_at = datetime.now().isoformat()
+
+
+    # ========================================================
+    # GET PREVIOUS BLOCK'S HASH (the "chain" part)
+    # ========================================================
+
+    cursor.execute("""
+
+        SELECT hash
+
+        FROM audit_logs
+
+        ORDER BY id DESC
+
+        LIMIT 1
+
+    """)
+
+    last_row = cursor.fetchone()
+
+    prev_hash = (
+        last_row["hash"]
+        if last_row and last_row["hash"]
+        else GENESIS_HASH
+    )
+
+
+    # ========================================================
+    # COMPUTE THIS BLOCK'S HASH
+    # ========================================================
+
+    block_hash = compute_block_hash(
+
+        prev_hash,
+
+        officer_name,
+
+        action,
+
+        details,
+
+        created_at,
+
+        screening_id,
+    )
 
 
     cursor.execute("""
@@ -607,11 +746,19 @@ def add_audit_log(
 
             details,
 
-            created_at
+            created_at,
+
+            screening_id,
+
+            hash,
+
+            prev_hash
 
         )
 
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+
+        RETURNING id
 
     """, (
 
@@ -621,14 +768,135 @@ def add_audit_log(
 
         details,
 
-        datetime.now().isoformat()
+        created_at,
 
+        screening_id,
+
+        block_hash,
+
+        prev_hash,
     ))
+
+
+    log_id = cursor.fetchone()["id"]
 
 
     conn.commit()
 
+    cursor.close()
+
     conn.close()
+
+    return log_id
+
+
+# ============================================================
+# GET AUDIT CHAIN (for the dashboard)
+# ============================================================
+
+def get_audit_chain(limit=100):
+
+    conn = get_connection()
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
+
+        SELECT *
+
+        FROM audit_logs
+
+        ORDER BY id DESC
+
+        LIMIT %s
+
+    """, (limit,))
+
+    logs = [
+        dict(row)
+        for row in cursor.fetchall()
+    ]
+
+    cursor.close()
+
+    conn.close()
+
+    return logs
+
+
+# ============================================================
+# VERIFY AUDIT CHAIN INTEGRITY
+# ============================================================
+# Walks the chain from the genesis block forward, recomputing
+# each block's hash from its stored data. If a record was
+# edited after the fact, its recomputed hash will not match
+# what's stored - and every block after it will also fail,
+# since each one references the previous hash.
+# ============================================================
+
+def verify_audit_chain():
+
+    conn = get_connection()
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
+
+        SELECT *
+
+        FROM audit_logs
+
+        ORDER BY id ASC
+
+    """)
+
+    rows = [
+        dict(row)
+        for row in cursor.fetchall()
+    ]
+
+    cursor.close()
+
+    conn.close()
+
+    expected_prev = GENESIS_HASH
+
+    broken_blocks = []
+
+    for row in rows:
+
+        recomputed = compute_block_hash(
+
+            expected_prev,
+
+            row["officer_name"],
+
+            row["action"],
+
+            row["details"],
+
+            row["created_at"],
+
+            row.get("screening_id"),
+        )
+
+        if (
+            row.get("prev_hash") != expected_prev
+            or row.get("hash") != recomputed
+        ):
+
+            broken_blocks.append(row["id"])
+
+        expected_prev = row["hash"]
+
+    return {
+
+        "valid": len(broken_blocks) == 0,
+
+        "total_blocks": len(rows),
+
+        "broken_blocks": broken_blocks,
+    }
 
 
 # ============================================================
@@ -726,6 +994,8 @@ def get_dashboard_data():
     ]
 
 
+    cursor.close()
+
     conn.close()
 
 
@@ -737,7 +1007,7 @@ def get_dashboard_data():
 
             "screenings_today": total_screenings,
 
-            "average_risk_score": round(average, 1) if average else 0,
+            "average_risk_score": round(float(average), 1) if average else 0,
 
             "cleared_documents": cleared,
 
