@@ -5,6 +5,12 @@ from datetime import datetime
 
 import psycopg2
 import psycopg2.extras
+from dotenv import load_dotenv
+
+# Load .env here too, not just in main.py - this way database.py works
+# correctly even when run on its own (e.g. for manual repair/testing),
+# not only when imported after main.py has already called load_dotenv().
+load_dotenv()
 
 # ============================================================
 # BLOCKCHAIN-STYLE HASH CHAIN
@@ -238,6 +244,74 @@ def initialize_database():
 
             cursor.execute(
                 f"ALTER TABLE audit_logs ADD COLUMN {column} {col_type}"
+            )
+
+
+    # --------------------------------------------------------
+    # Legacy hash-chain repair: records inserted before the
+    # hash-chain feature existed have hash = NULL and
+    # prev_hash = NULL. If EVERY record is legacy (none hashed
+    # yet), rebuild the whole chain from GENESIS_HASH forward
+    # using the same compute_block_hash() algorithm so
+    # verify_audit_chain() works on historical data too.
+    #
+    # If the table has a MIX of hashed and legacy rows, do NOT
+    # touch anything automatically - that would risk silently
+    # corrupting an already-valid chain. Print a warning instead
+    # so it can be reviewed manually.
+    # --------------------------------------------------------
+
+    cursor.execute("""
+        SELECT id, officer_name, action, details, created_at,
+               screening_id, hash, prev_hash
+        FROM audit_logs
+        ORDER BY id ASC
+    """)
+
+    all_rows = cursor.fetchall()
+
+    if all_rows:
+
+        unhashed_count = sum(
+            1
+            for row in all_rows
+            if row["hash"] is None and row["prev_hash"] is None
+        )
+
+        if unhashed_count == len(all_rows):
+
+            print(f"Repairing {unhashed_count} legacy audit record(s)...")
+
+            previous_hash = GENESIS_HASH
+
+            for row in all_rows:
+
+                new_hash = compute_block_hash(
+                    previous_hash,
+                    row["officer_name"],
+                    row["action"],
+                    row["details"],
+                    row["created_at"],
+                    row.get("screening_id"),
+                )
+
+                cursor.execute("""
+                    UPDATE audit_logs
+                    SET hash = %s, prev_hash = %s
+                    WHERE id = %s
+                """, (new_hash, previous_hash, row["id"]))
+
+                previous_hash = new_hash
+
+            print("Legacy audit hash chain repaired successfully.")
+
+        elif unhashed_count > 0:
+
+            print(
+                f"WARNING: audit_logs has a mix of {unhashed_count} legacy "
+                f"record(s) without a hash and {len(all_rows) - unhashed_count} "
+                f"already-hashed record(s). Skipping automatic repair to avoid "
+                f"corrupting the existing chain. Manual review recommended."
             )
 
 
