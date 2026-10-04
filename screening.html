@@ -634,9 +634,19 @@ a{
   National ID
 </button>
 
-<button class="doctype-btn" onclick="selectDoc('Driving licence',this)">
+<button class="doctype-btn" onclick="selectDoc('Driving Licence',this)">
   <i class="ti ti-license"></i>
-  Driving licence
+  Driving Licence
+</button>
+
+<button class="doctype-btn" onclick="selectDoc('Aadhaar',this)">
+  <i class="ti ti-fingerprint"></i>
+  Aadhaar
+</button>
+
+<button class="doctype-btn" onclick="selectDoc('PAN Card',this)">
+  <i class="ti ti-credit-card"></i>
+  PAN Card
 </button>
 
 <button class="doctype-btn" onclick="selectDoc('Permit',this)">
@@ -963,7 +973,12 @@ style="display:none;"></div>
 /* CONFIGURATION */
 /* ============================================= */
 
-const API_URL = (window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost") && window.location.port !== "3000" ? "http://127.0.0.1:8000/api/screen" : "/api/screen";
+/* When opened via file://, hostname is "" — always point at the local backend */
+const _h = window.location.hostname;
+const API_URL = (_h === "" || _h === "127.0.0.1" || _h === "localhost")
+  ? "http://127.0.0.1:8000/api/screen"
+  : "/api/screen";
+
 
 /* ============================================= */
 /* VARIABLES */
@@ -1682,828 +1697,603 @@ function showBackendError(message){
 
 
 /* ============================================= */
-/* SHOW RESULTS */
+/* SHOW RESULTS  –  Full Dashboard Rebuild       */
 /* ============================================= */
 
+/* Store preview URL so we can revoke it later */
+let _previewURL = null;
+
 function showResults(data){
-  try {
+
+  /* DEBUG — open F12 → Console to inspect */
+  console.log("=== FULL API RESPONSE ===", JSON.stringify(data, null, 2));
+
+  try{
+
     document.getElementById("stage-scanning").style.display = "none";
+
     const results = document.getElementById("stage-results");
     results.style.display = "block";
 
-
-  /* ============================================= */
-  /* REAL BACKEND VALUES */
-  /* ============================================= */
-
-  const status =
-    data.status || "UNKNOWN";
-
-
-  const riskScore =
-    typeof data.risk_score === "number"
-      ? data.risk_score
-      : 0;
-
-
-  /* IMPORTANT: REAL DETECTED DOCUMENT TYPE */
-
-  const documentType =
-    data.document_type ||
-    selectedDocumentType ||
-    "Unknown";
-
-
-  const issues =
-    Array.isArray(data.issues)
-      ? data.issues
-      : [];
-
-
-  const verifiedChecks =
-    Array.isArray(data.verified_checks)
-      ? data.verified_checks
-      : [];
-
-
-  const extractedFields =
-    data.extracted_fields || {};
-
-
-  const name =
-    extractedFields.name_guess || "Not detected";
-
-
-  const documentNumber =
-    extractedFields.document_number || "Not detected";
-
-
-  const dates =
-    Array.isArray(extractedFields.dates_found)
-      ? extractedFields.dates_found
-      : [];
-
-
-  const datesText =
-    dates.length > 0
-      ? dates.join(", ")
-      : "Not detected";
-
-
-  /* ============================================= */
-  /* STATUS COLOR */
-  /* ============================================= */
-
-  let statusColor = "var(--valid)";
-
-  let statusIcon = "ti-circle-check";
-
-
-  if(status.includes("REVIEW")){
-
-    statusColor = "var(--medium)";
-
-    statusIcon = "ti-alert-triangle";
-
-  }
-
-
-  if(status.includes("SUSPICIOUS")){
-
-    statusColor = "var(--suspicious)";
-
-    statusIcon = "ti-alert-triangle";
-
-  }
-
-
-  if(status.includes("HIGH")){
-
-    statusColor = "var(--high)";
-
-    statusIcon = "ti-alert-triangle";
-
-  }
-
-
-  /* ============================================= */
-  /* ISSUES HTML */
-  /* ============================================= */
-
-  const issuesHTML =
-
-    issues.length === 0
-
-    ?
-
-    `
-
-    <div
-      style="
-      padding:18px;
-      border-radius:10px;
-      background:rgba(52,211,153,.06);
-      border:1px solid rgba(52,211,153,.25);
-      display:flex;
-      align-items:center;
-      gap:10px;
-      color:var(--valid);
-      font-size:13px;">
-
-      <i
-        class="ti ti-circle-check"
-        style="font-size:20px;">
-      </i>
-
-      No issues were detected by the current validation rules.
-
-    </div>
-
-    `
-
-    :
-
-    issues.map(issue => {
-
-      const severity =
-        issue.severity || "UNKNOWN";
-
-
-      let issueColor = "var(--medium)";
-
-
-      if(severity === "HIGH"){
-        issueColor = "var(--high)";
-      }
-
-
-      if(severity === "LOW"){
-        issueColor = "var(--valid)";
-      }
-
-
-      return `
-
-        <div class="issue-card">
-
-          <div
-            style="
-            color:${issueColor};
-            font-weight:600;
-            font-size:13px;">
-
-            <i class="ti ti-alert-triangle"></i>
-
-            ${escapeHTML(
-              issue.title ||
-              "Document issue detected"
-            )}
-
-          </div>
-
-
-          <div
-            style="
-            margin-top:6px;
-            color:var(--text-5);
-            font-size:11px;">
-
-            Severity:
-            ${escapeHTML(severity)}
-
-          </div>
-
-
-          <div
-            style="
-            margin-top:8px;
-            color:var(--text-4);
-            font-size:12px;
-            line-height:1.5;">
-
-            ${escapeHTML(
-              issue.description ||
-              "No description available."
-            )}
-
-          </div>
-
-        </div>
-
-      `;
-
-    }).join("");
-
-
-  /* ============================================= */
-  /* VERIFIED CHECKS HTML */
-  /* ============================================= */
-
-  const checksHTML =
-
-    verifiedChecks.length === 0
-
-    ?
-
-    `
-
-    <div
-      style="
-      padding:14px;
-      color:var(--text-4);
-      font-size:13px;">
-
-      No verified checks were returned.
-
-    </div>
-
-    `
-
-    :
-
-    verifiedChecks.map(check => `
-
-      <div class="check-item">
-
-        <i
-          class="ti ti-circle-check"
-          style="
-          color:var(--valid);
-          font-size:18px;">
-        </i>
-
-
-        <span
-          style="
-          color:var(--text-3);
-          font-size:12.5px;">
-
-          ${escapeHTML(check)}
-
-        </span>
-
-      </div>
-
-    `).join("");
-
-
-  /* ============================================= */
-  /* RESULTS UI */
-  /* ============================================= */
-
-  results.innerHTML = `
-
-
-  <!-- BACK BUTTON -->
-
-  <div style="margin-bottom:16px;">
-
-    <button
-      class="btn btn-ghost"
-      onclick="location.reload()">
-
-      <i class="ti ti-arrow-left"></i>
-
-      New Screening
-
-    </button>
-
-  </div>
-
-
-  <!-- RESULT STATUS -->
-
-  <div
-    class="panel"
-    style="margin-bottom:16px;">
-
-    <div class="section-title">
-
-      <h3>
-
-        <i class="ti ti-shield-check"></i>
-
-        Document screening result
-
-      </h3>
-
-    </div>
-
-
-    <div
-      class="result-status"
-      style="border:1px solid ${statusColor};">
-
-
-      <div
-        style="
+    /* ── Revoke old preview blob URL ── */
+    if(_previewURL){ URL.revokeObjectURL(_previewURL); _previewURL = null; }
+
+    /* ============================================= */
+    /* PARSE REAL API FIELDS                         */
+    /* ============================================= */
+
+    const status        = (data.status || "UNKNOWN").toUpperCase();
+    const riskScore     = typeof data.risk_score === "number" ? data.risk_score : 0;
+
+    /* Use detected type from API; if "Unknown" or missing, fall back to what officer selected */
+    const detectedType  = (data.document_type && data.document_type !== "Unknown") ? data.document_type : null;
+    const documentType  = detectedType || selectedDocumentType || "Unknown";
+    const wasAutoDetected = !!detectedType && detectedType !== selectedDocumentType;
+
+    const issues        = Array.isArray(data.issues) ? data.issues : [];
+    const verifiedChecks= Array.isArray(data.verified_checks) ? data.verified_checks : [];
+    const docInfo       = data.document_information || {};
+    const ocrText       = data.ocr_text || "";
+    const ocrConf       = typeof data.ocr_confidence === "number" ? data.ocr_confidence : null;
+    const mrzData       = data.passport_mrz || {};
+    const visualData    = data.visual_analysis || {};
+
+    /* ── Status colour ── */
+    let statusColor = "var(--valid)";
+    let statusIcon  = "ti-circle-check";
+    let statusBg    = "rgba(52,211,153,.08)";
+    let statusBorder= "rgba(52,211,153,.3)";
+
+    if(status.includes("REVIEW")){
+      statusColor  = "var(--medium)";
+      statusIcon   = "ti-alert-triangle";
+      statusBg     = "rgba(251,191,36,.08)";
+      statusBorder = "rgba(251,191,36,.3)";
+    }
+    if(status.includes("SUSPICIOUS") || status.includes("MEDIUM")){
+      statusColor  = "var(--suspicious)";
+      statusIcon   = "ti-alert-triangle";
+      statusBg     = "rgba(251,146,60,.08)";
+      statusBorder = "rgba(251,146,60,.3)";
+    }
+    if(status.includes("HIGH") || status.includes("REJECT") || status.includes("FRAUD")){
+      statusColor  = "var(--high)";
+      statusIcon   = "ti-shield-x";
+      statusBg     = "rgba(248,113,113,.08)";
+      statusBorder = "rgba(248,113,113,.3)";
+    }
+
+    /* ── Risk bar width ── */
+    const riskBarPct = Math.min(100, Math.max(0, riskScore));
+    let riskBarColor = statusColor;
+
+    /* ── Document preview ── */
+    let previewHTML = `
+      <div style="
         display:flex;
         align-items:center;
-        gap:14px;
+        justify-content:center;
+        height:180px;
+        background:var(--panel-2);
+        border-radius:10px;
+        border:1px solid var(--border);">
+        <i class="ti ti-file-check" style="font-size:48px;color:var(--cyan);"></i>
+      </div>
+    `;
+    if(selectedFile && selectedFile.type && selectedFile.type.startsWith("image/")){
+      _previewURL = URL.createObjectURL(selectedFile);
+      previewHTML = `
+        <img
+          src="${_previewURL}"
+          alt="Document preview"
+          style="
+            width:100%;
+            max-height:220px;
+            object-fit:contain;
+            border-radius:10px;
+            border:1px solid var(--border);
+            background:#000;"
+        />
+      `;
+    }
+
+    /* ============================================= */
+    /* FIELD HELPER                                  */
+    /* ============================================= */
+
+    function fieldRow(label, value, mono = false){
+      if(value === null || value === undefined || value === "" || value === "Not detected"){
+        return `
+          <div class="field-row">
+            <span style="color:var(--text-5);">${escapeHTML(label)}</span>
+            <span style="color:var(--text-5);font-style:italic;">Not detected</span>
+          </div>`;
+      }
+      return `
+        <div class="field-row">
+          <span style="color:var(--text-5);">${escapeHTML(label)}</span>
+          <span ${mono ? 'class="mono"' : ""} style="color:${mono?"var(--cyan)":"var(--text-3)"};text-align:right;max-width:65%;word-break:break-word;">${escapeHTML(String(value))}</span>
+        </div>`;
+    }
+
+    /* ── Safe get from docInfo, also try extracted_fields as fallback ── */
+    const ef = data.extracted_fields || {};
+    function fi(key){
+      const v = docInfo[key];
+      if(v && v !== "Not detected") return v;
+      /* Fallback: check extracted_fields for name/doc_number */
+      if(key === "name" && ef.name_guess) return ef.name_guess;
+      if(key === "document_number" && ef.document_number) return ef.document_number;
+      return v || "Not detected";
+    }
+
+    /* ============================================= */
+    /* DOCUMENT-SPECIFIC FIELDS                      */
+    /* ============================================= */
+
+    let docFieldsHTML = "";
+    const dt = documentType.toLowerCase();
+
+    if(dt.includes("passport")){
+      docFieldsHTML =
+        fieldRow("Full Name",       fi("name")) +
+        fieldRow("Passport Number", fi("document_number"), true) +
+        fieldRow("Nationality",     fi("nationality")) +
+        fieldRow("Date of Birth",   fi("date_of_birth")) +
+        fieldRow("Sex",             fi("sex")) +
+        fieldRow("Place of Birth",  fi("place_of_birth")) +
+        fieldRow("Date of Issue",   fi("date_of_issue")) +
+        fieldRow("Date of Expiry",  fi("date_of_expiry")) +
+        fieldRow("Issuing Country", fi("issuing_country"));
+    }
+    else if(dt.includes("visa")){
+      docFieldsHTML =
+        fieldRow("Name",           fi("name")) +
+        fieldRow("Visa Number",    fi("visa_number") !== "Not detected" ? fi("visa_number") : fi("document_number"), true) +
+        fieldRow("Nationality",    fi("nationality")) +
+        fieldRow("Visa Type",      fi("visa_type")) +
+        fieldRow("Date of Birth",  fi("date_of_birth")) +
+        fieldRow("Sex",            fi("sex")) +
+        fieldRow("Entries",        fi("entries")) +
+        fieldRow("Valid From",     fi("valid_from")) +
+        fieldRow("Valid Until",    fi("valid_until")) +
+        fieldRow("Issuing Country",fi("issuing_country"));
+    }
+    else if(dt.includes("national")){
+      docFieldsHTML =
+        fieldRow("Name",          fi("name")) +
+        fieldRow("ID Number",     fi("document_number"), true) +
+        fieldRow("Nationality",   fi("nationality")) +
+        fieldRow("Date of Birth", fi("date_of_birth")) +
+        fieldRow("Sex",           fi("sex")) +
+        fieldRow("Address",       fi("address")) +
+        fieldRow("Date of Issue", fi("date_of_issue")) +
+        fieldRow("Date of Expiry",fi("date_of_expiry"));
+    }
+    else if(dt.includes("driving") || dt.includes("licence") || dt.includes("license")){
+      docFieldsHTML =
+        fieldRow("Name",              fi("name")) +
+        fieldRow("Licence Number",    fi("licence_number") !== "Not detected" ? fi("licence_number") : fi("document_number"), true) +
+        fieldRow("Date of Birth",     fi("date_of_birth")) +
+        fieldRow("Sex",               fi("sex")) +
+        fieldRow("Blood Group",       fi("blood_group")) +
+        fieldRow("Date of Issue",     fi("date_of_issue")) +
+        fieldRow("Valid Till (NT)",   fi("date_of_expiry")) +
+        fieldRow("Vehicle Class",     fi("vehicle_class")) +
+        fieldRow("Address",           fi("address"));
+    }
+    else if(dt.includes("voter")){
+      docFieldsHTML =
+        fieldRow("Name",              fi("name")) +
+        fieldRow("EPIC No",           fi("document_number"), true) +
+        fieldRow("Father's / Husband's Name", fi("father_name")) +
+        fieldRow("Date of Birth",     fi("date_of_birth")) +
+        fieldRow("Sex",               fi("sex")) +
+        fieldRow("Constituency",      fi("constituency")) +
+        fieldRow("Address",           fi("address"));
+    }
+    else if(dt.includes("aadhaar")){
+      docFieldsHTML =
+        fieldRow("Name",           fi("name")) +
+        fieldRow("Aadhaar Number", fi("document_number"), true) +
+        fieldRow("Date of Birth",  fi("date_of_birth")) +
+        fieldRow("Gender",         fi("sex")) +
+        fieldRow("Address",        fi("address")) +
+        fieldRow("Mobile (last 4)",fi("mobile"));
+    }
+    else if(dt.includes("pan")){
+      docFieldsHTML =
+        fieldRow("Name",          fi("name")) +
+        fieldRow("PAN Number",    fi("document_number"), true) +
+        fieldRow("Father's Name", fi("father_name")) +
+        fieldRow("Date of Birth", fi("date_of_birth"));
+    }
+    else if(dt.includes("permit")){
+      docFieldsHTML =
+        fieldRow("Name",          fi("name")) +
+        fieldRow("Permit Number", fi("permit_number") !== "Not detected" ? fi("permit_number") : fi("document_number"), true) +
+        fieldRow("Permit Type",   fi("permit_type")) +
+        fieldRow("Date of Issue", fi("date_of_issue")) +
+        fieldRow("Date of Expiry",fi("date_of_expiry"));
+    }
+    else{
+      docFieldsHTML =
+        fieldRow("Name",           fi("name")) +
+        fieldRow("Document Number",fi("document_number"), true) +
+        fieldRow("Nationality",    fi("nationality")) +
+        fieldRow("Date of Birth",  fi("date_of_birth")) +
+        fieldRow("Sex",            fi("sex")) +
+        fieldRow("Date of Issue",  fi("date_of_issue")) +
+        fieldRow("Date of Expiry", fi("date_of_expiry"));
+    }
+
+    /* ============================================= */
+    /* SECTION 1 — OCR EXTRACTION                    */
+    /* ============================================= */
+
+    const ocrConfLabel = ocrConf !== null
+      ? `<span style="color:${ocrConf >= 80 ? "var(--valid)" : ocrConf >= 50 ? "var(--medium)" : "var(--high)"};font-weight:600;">${ocrConf.toFixed(1)}%</span>`
+      : `<span style="color:var(--text-5);">—</span>`;
+
+    const ocrSection = `
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="section-title">
+          <h3><i class="ti ti-file-text"></i> OCR Extraction</h3>
+          <div style="font-size:12px;color:var(--text-4);">Confidence: ${ocrConfLabel}</div>
+        </div>
+        <div style="
+          background:var(--panel-2);
+          border:1px solid var(--border);
+          border-radius:10px;
+          padding:14px;
+          font-family:'JetBrains Mono',monospace;
+          font-size:11.5px;
+          color:var(--text-4);
+          max-height:200px;
+          overflow-y:auto;
+          line-height:1.7;
+          white-space:pre-wrap;
+          word-break:break-word;">
+          ${ocrText ? escapeHTML(ocrText) : '<span style="color:var(--text-5);font-style:italic;">No OCR text extracted</span>'}
+        </div>
+      </div>`;
+
+    /* ============================================= */
+    /* SECTION 2 — MRZ / DOCUMENT ANALYSIS           */
+    /* ============================================= */
+
+    let mrzSection = "";
+    const hasMrz = Object.keys(mrzData).length > 0;
+
+    if(dt.includes("passport") || hasMrz){
+      const mrzLine1 = mrzData.line1 || mrzData.mrz_line1 || mrzData.raw_line1 || "";
+      const mrzLine2 = mrzData.line2 || mrzData.mrz_line2 || mrzData.raw_line2 || "";
+      const mrzLines = [mrzLine1, mrzLine2].filter(Boolean);
+
+      const mrzRaw = mrzLines.length
+        ? mrzLines.join("\n")
+        : (mrzData.raw || mrzData.mrz_raw || "");
+
+      mrzSection = `
+        <div class="panel" style="margin-bottom:16px;">
+          <div class="section-title">
+            <h3><i class="ti ti-barcode"></i> MRZ / Document Analysis</h3>
+            ${mrzData.valid !== undefined
+              ? `<span style="font-size:11px;padding:3px 10px;border-radius:99px;background:${mrzData.valid?"rgba(52,211,153,.15)":"rgba(248,113,113,.15)"};color:${mrzData.valid?"var(--valid)":"var(--high)"};">MRZ ${mrzData.valid?"VALID":"INVALID"}</span>`
+              : ""}
+          </div>
+          ${ mrzRaw ? `
+            <div style="
+              background:#060B14;
+              border:1px solid var(--border-3);
+              border-radius:10px;
+              padding:14px 16px;
+              font-family:'JetBrains Mono',monospace;
+              font-size:12px;
+              color:var(--cyan);
+              letter-spacing:1.5px;
+              word-break:break-all;
+              margin-bottom:14px;">${escapeHTML(mrzRaw)}</div>` : "" }
+          ${ fieldRow("Full Name",      mrzData.name || (mrzData.surname ? `${mrzData.given_names || ""} ${mrzData.surname}`.trim() : null)) }
+          ${ fieldRow("Document No.",   mrzData.doc_number || mrzData.document_number || mrzData.doc_num, true) }
+          ${ fieldRow("Nationality",    mrzData.nationality) }
+          ${ fieldRow("Date of Birth",  mrzData.date_of_birth || mrzData.dob) }
+          ${ fieldRow("Sex",            mrzData.sex) }
+          ${ fieldRow("Expiry Date",    mrzData.expiry_date || mrzData.date_of_expiry) }
+          ${ !hasMrz && !mrzRaw ? '<div style="color:var(--text-5);font-size:12.5px;padding:12px 0;">No MRZ data detected in this document.</div>' : "" }
+        </div>`;
+    }
+
+    /* ============================================= */
+    /* SECTION 3 — TAMPERING INDICATORS              */
+    /* ============================================= */
+
+    const tampering = visualData.tampering_indicators || visualData.tampering || [];
+    const tamperingArr = Array.isArray(tampering) ? tampering : (typeof tampering === "string" ? [tampering] : []);
+    const digitalAlts = visualData.digital_alterations || [];
+    const fontAnoms   = visualData.font_anomalies || "";
+    const printQual   = visualData.print_quality || "";
+    const colorAnoms  = visualData.color_anomalies || "";
+    const structIssues= visualData.structural_issues || [];
+    const structArr   = Array.isArray(structIssues) ? structIssues : [structIssues].filter(Boolean);
+
+    const allTampering = [...tamperingArr, ...( Array.isArray(digitalAlts) ? digitalAlts : [] ), ...structArr].filter(Boolean);
+
+    const tamperSection = `
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="section-title">
+          <h3><i class="ti ti-scan-eye"></i> Tampering Indicators</h3>
+          <span style="font-size:11px;padding:3px 10px;border-radius:99px;
+            background:${allTampering.length?"rgba(248,113,113,.12)":"rgba(52,211,153,.1)"};
+            color:${allTampering.length?"var(--high)":"var(--valid)"};">  
+            ${allTampering.length ? allTampering.length + " Detected" : "Clean"}
+          </span>
+        </div>
+        ${ printQual  ? fieldRow("Print Quality",    printQual) : "" }
+        ${ fontAnoms  ? fieldRow("Font Anomalies",   fontAnoms) : "" }
+        ${ colorAnoms ? fieldRow("Color Anomalies",  colorAnoms) : "" }
+        ${ allTampering.length > 0
+          ? allTampering.map(t => `
+              <div style="display:flex;align-items:flex-start;gap:10px;
+                padding:10px 12px;margin-bottom:8px;
+                border-radius:9px;
+                background:rgba(248,113,113,.07);
+                border:1px solid rgba(248,113,113,.25);">
+                <i class="ti ti-alert-triangle" style="color:var(--high);margin-top:2px;"></i>
+                <span style="color:var(--text-3);font-size:12.5px;">${escapeHTML(t)}</span>
+              </div>`).join("")
+          : `<div style="display:flex;align-items:center;gap:10px;
+               padding:14px 12px;border-radius:9px;
+               background:rgba(52,211,153,.06);
+               border:1px solid rgba(52,211,153,.25);
+               color:var(--valid);font-size:13px;">
+               <i class="ti ti-circle-check" style="font-size:18px;"></i>
+               No tampering indicators detected.
+             </div>`
+        }
+      </div>`;
+
+    /* ============================================= */
+    /* SECTION 4 — VALIDATION CHECKS                 */
+    /* ============================================= */
+
+    const checksSection = `
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="section-title">
+          <h3><i class="ti ti-shield-check"></i> Validation Checks</h3>
+          <div style="font-size:12px;">
+            ${ issues.length > 0
+              ? `<span style="color:var(--high);">${issues.length} issue${issues.length>1?"s":""}</span>`
+              : `<span style="color:var(--valid);">All clear</span>`}
+            &nbsp;·&nbsp;
+            <span style="color:var(--valid);">${verifiedChecks.length} passed</span>
+          </div>
+        </div>
+
+        ${ issues.length > 0 ? `
+          <div style="margin-bottom:14px;">
+            <div style="font-size:11.5px;color:var(--text-5);margin-bottom:8px;letter-spacing:.4px;">ISSUES DETECTED</div>
+            ${issues.map(issue => {
+              const sev = (issue.severity || "MEDIUM").toUpperCase();
+              const col = sev === "HIGH" ? "var(--high)" : sev === "LOW" ? "var(--low)" : "var(--medium)";
+              return `<div class="issue-card" style="border-left:3px solid ${col};">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <i class="ti ti-alert-triangle" style="color:${col};"></i>
+                  <span style="color:${col};font-weight:600;font-size:13px;">${escapeHTML(issue.title || "Issue")}</span>
+                  <span style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:99px;
+                    background:${col === "var(--high)" ? "rgba(248,113,113,.15)" : col === "var(--low)" ? "rgba(52,211,153,.12)" : "rgba(251,191,36,.12)"};
+                    color:${col};">${escapeHTML(sev)}</span>
+                </div>
+                <div style="margin-top:8px;color:var(--text-4);font-size:12px;line-height:1.55;">${escapeHTML(issue.description || "No description.")}</div>
+              </div>`;
+            }).join("")}
+          </div>` : "" }
+
+        ${ verifiedChecks.length > 0 ? `
+          <div>
+            <div style="font-size:11.5px;color:var(--text-5);margin-bottom:8px;letter-spacing:.4px;">PASSED CHECKS</div>
+            ${verifiedChecks.map(chk => `
+              <div class="check-item">
+                <i class="ti ti-circle-check" style="color:var(--valid);font-size:17px;"></i>
+                <span style="color:var(--text-3);font-size:12.5px;">${escapeHTML(chk)}</span>
+              </div>`).join("")}
+          </div>` : `
+          <div style="color:var(--text-5);font-size:12.5px;padding:10px 0;">No verified checks returned.</div>` }
+
+        ${ issues.length === 0 && verifiedChecks.length === 0 ? `
+          <div style="display:flex;align-items:center;gap:10px;padding:14px;
+            border-radius:9px;background:rgba(52,211,153,.06);
+            border:1px solid rgba(52,211,153,.25);color:var(--valid);font-size:13px;">
+            <i class="ti ti-circle-check" style="font-size:18px;"></i>No issues detected.
+          </div>` : "" }
+      </div>`;
+
+    /* ============================================= */
+    /* SECTION 5 — RISK ASSESSMENT                   */
+    /* ============================================= */
+
+    const riskSection = `
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="section-title">
+          <h3><i class="ti ti-chart-bar"></i> Risk Assessment</h3>
+        </div>
+        <div style="margin-bottom:20px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+            <span style="font-size:13px;color:var(--text-4);">Risk Score</span>
+            <span style="font-size:26px;font-weight:700;color:${riskBarColor};">${riskScore}<span style="font-size:14px;color:var(--text-5);">/100</span></span>
+          </div>
+          <div style="height:8px;background:var(--panel-2);border-radius:99px;overflow:hidden;border:1px solid var(--border);">
+            <div style="height:100%;width:${riskBarPct}%;background:${riskBarColor};border-radius:99px;
+              transition:width .8s cubic-bezier(.4,0,.2,1);"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--text-5);margin-top:5px;">
+            <span>0 — Clear</span><span>50 — Review</span><span>100 — High Risk</span>
+          </div>
+        </div>
+        ${fieldRow("Overall Status",   status)}
+        ${fieldRow("Document Type",    documentType)}
+        ${fieldRow("Issues Found",     issues.length ? String(issues.length) : "0")}
+        ${fieldRow("Checks Passed",    verifiedChecks.length ? String(verifiedChecks.length) : "0")}
+        ${ data.message ? `<div style="margin-top:14px;padding:12px;border-radius:9px;
+          background:var(--panel-2);border:1px solid var(--border);
+          font-size:12.5px;color:var(--text-4);line-height:1.6;">
+          <strong style="color:var(--text-2);">Analysis note:</strong><br>
+          ${escapeHTML(data.message)}</div>` : "" }
+      </div>`;
+
+    /* ============================================= */
+    /* ASSEMBLE FULL RESULTS UI                      */
+    /* ============================================= */
+
+    results.innerHTML = `
+
+      <!-- BACK BUTTON -->
+      <div style="margin-bottom:16px;">
+        <button class="btn btn-ghost" onclick="location.reload()">
+          <i class="ti ti-arrow-left"></i> New Screening
+        </button>
+      </div>
+
+      <!-- ① TOP RISK BANNER -->
+      <div style="
+        padding:18px 22px;
+        border-radius:14px;
+        background:${statusBg};
+        border:1px solid ${statusBorder};
+        margin-bottom:16px;
+        display:flex;
+        align-items:center;
+        gap:16px;
         flex-wrap:wrap;">
 
-
-        <div
-          style="
-          width:54px;
-          height:54px;
+        <div style="
+          width:52px;height:52px;
           border-radius:12px;
-          display:flex;
-          align-items:center;
-          justify-content:center;
+          display:flex;align-items:center;justify-content:center;
           background:var(--panel);">
-
-          <i
-            class="ti ${statusIcon}"
-            style="
-            font-size:28px;
-            color:${statusColor};">
-          </i>
-
+          <i class="ti ${statusIcon}" style="font-size:26px;color:${statusColor};"></i>
         </div>
-
 
         <div style="flex:1;">
-
-          <div
-            style="
-            font-size:22px;
-            font-weight:700;
-            color:${statusColor};">
-
-            ${escapeHTML(status)}
-
+          <div style="font-size:20px;font-weight:700;color:${statusColor};">${escapeHTML(status)}</div>
+          <div style="font-size:12.5px;color:var(--text-4);margin-top:4px;">
+            ${escapeHTML(data.message || "Document analyzed successfully.")}
           </div>
-
-
-          <div
-            style="
-            margin-top:5px;
-            font-size:12.5px;
-            color:var(--text-4);">
-
-            ${escapeHTML(
-              data.message ||
-              "Document analyzed successfully."
-            )}
-
+          <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:11px;padding:3px 10px;border-radius:99px;
+              background:rgba(34,211,238,.12);color:var(--cyan);font-weight:500;">
+              <i class="ti ti-file-search"></i> ${escapeHTML(documentType)}
+            </span>
+            ${ data.document_type && data.document_type !== "Unknown" && data.document_type !== selectedDocumentType
+              ? `<span style="font-size:11px;color:var(--medium);">
+                  <i class="ti ti-alert-triangle"></i> AI detected: <strong>${escapeHTML(data.document_type)}</strong> — officer selected: <strong>${escapeHTML(selectedDocumentType)}</strong>
+                </span>`
+              : "" }
           </div>
-
         </div>
 
-
-        <div
-          style="
-          padding:10px 14px;
+        <div style="
+          padding:12px 18px;
           background:var(--panel);
-          border-radius:9px;
-          border:1px solid var(--border);">
-
-          <div
-            style="
-            font-size:11px;
-            color:var(--text-5);">
-
-            Risk score
-
-          </div>
-
-
-          <div
-            style="
-            font-size:22px;
-            font-weight:700;
-            color:${statusColor};">
-
-            ${riskScore}/100
-
-          </div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-  </div>
-
-
-  <!-- DOCUMENT INFORMATION -->
-
-  <div
-    class="grid grid-2"
-    style="margin-bottom:16px;">
-
-
-    <!-- UPLOADED FILE -->
-
-    <div class="panel">
-
-      <div class="section-title">
-
-        <h3>
-
-          <i class="ti ti-file"></i>
-
-          Uploaded document
-
-        </h3>
-
-      </div>
-
-
-      <div
-        style="
-        padding:25px;
-        background:var(--panel-2);
-        border:1px solid var(--border);
-        border-radius:10px;
-        text-align:center;">
-
-        <i
-          class="ti ti-file-check"
-          style="
-          font-size:40px;
-          color:var(--cyan);">
-        </i>
-
-
-        <div
-          style="
-          margin-top:10px;
-          color:var(--text-3);
-          font-size:13px;">
-
-          ${escapeHTML(selectedFile.name)}
-
-        </div>
-
-      </div>
-
-
-      <div
-        class="field-row"
-        style="margin-top:15px;">
-
-        <span style="color:var(--text-5);">
-          Document type
-        </span>
-
-        <span
-          style="
-          color:var(--cyan);
-          font-weight:600;">
-
-          ${escapeHTML(documentType)}
-
-        </span>
-
-      </div>
-
-
-      <div class="field-row">
-
-        <span style="color:var(--text-5);">
-          File format
-        </span>
-
-        <span style="color:var(--text-3);">
-
-          ${escapeHTML(
-            selectedFile.type || "Unknown"
-          )}
-
-        </span>
-
-      </div>
-
-
-      <div class="field-row">
-
-        <span style="color:var(--text-5);">
-          File size
-        </span>
-
-        <span style="color:var(--text-3);">
-
-          ${formatFileSize(selectedFile.size)}
-
-        </span>
-
-      </div>
-
-    </div>
-
-
-    <!-- SCREENING SUMMARY -->
-
-    <div class="panel">
-
-      <div class="section-title">
-
-        <h3>
-
-          <i class="ti ti-clipboard-check"></i>
-
-          Screening summary
-
-        </h3>
-
-      </div>
-
-
-      <div
-        style="
-        display:grid;
-        grid-template-columns:1fr 1fr;
-        gap:10px;">
-
-
-        <div
-          style="
-          padding:16px;
-          background:var(--panel-2);
+          border-radius:10px;
           border:1px solid var(--border);
-          border-radius:10px;">
-
-          <div
-            style="
-            font-size:22px;
-            color:var(--high);
-            font-weight:700;">
-
-            ${issues.length}
-
-          </div>
-
-
-          <div
-            style="
-            font-size:11px;
-            color:var(--text-5);
-            margin-top:5px;">
-
-            Issues found
-
-          </div>
-
-        </div>
-
-
-        <div
-          style="
-          padding:16px;
-          background:var(--panel-2);
-          border:1px solid var(--border);
-          border-radius:10px;">
-
-          <div
-            style="
-            font-size:22px;
-            color:var(--valid);
-            font-weight:700;">
-
-            ${verifiedChecks.length}
-
-          </div>
-
-
-          <div
-            style="
-            font-size:11px;
-            color:var(--text-5);
-            margin-top:5px;">
-
-            Checks passed
-
-          </div>
-
+          text-align:center;">
+          <div style="font-size:11px;color:var(--text-5);">Risk Score</div>
+          <div style="font-size:26px;font-weight:700;color:${statusColor};">${riskScore}<span style="font-size:13px;color:var(--text-5);">/100</span></div>
         </div>
 
       </div>
 
+      <!-- ② DOCUMENT PREVIEW + INFO -->
+      <div class="grid grid-2" style="margin-bottom:16px;">
 
-      <div
-        style="
-        margin-top:16px;
-        padding:14px;
-        border-radius:10px;
-        background:var(--panel-2);
-        border:1px solid var(--border);
-        font-size:12.5px;
-        color:var(--text-4);
-        line-height:1.6;">
+        <!-- Preview -->
+        <div class="panel">
+          <div class="section-title">
+            <h3><i class="ti ti-file"></i> Document Preview</h3>
+          </div>
+          ${previewHTML}
+          <div style="margin-top:14px;">
+            ${fieldRow("File Name",    selectedFile ? selectedFile.name : "—")}
+            ${fieldRow("File Format",  selectedFile ? (selectedFile.type || "Unknown") : "—")}
+            ${fieldRow("File Size",    selectedFile ? formatFileSize(selectedFile.size) : "—")}
+          </div>
+        </div>
 
-        <strong style="color:var(--text-2);">
-          Backend response:
-        </strong>
-
-        <br>
-
-        ${escapeHTML(
-          data.note ||
-          data.message ||
-          "Document analysis completed."
-        )}
+        <!-- Document Information -->
+        <div class="panel">
+          <div class="section-title">
+            <h3>
+              <i class="ti ti-file-description"></i> Document Information
+              <span style="
+                font-size:10px;
+                padding:2px 8px;
+                border-radius:99px;
+                background:rgba(34,211,238,.12);
+                color:var(--cyan);
+                font-weight:500;
+                margin-left:4px;
+              ">${escapeHTML(documentType)}</span>
+            </h3>
+            ${ wasAutoDetected ? `<span style="font-size:10px;color:var(--medium);">
+              <i class="ti ti-cpu"></i> AI detected
+            </span>` : `<span style="font-size:10px;color:var(--text-5);">
+              <i class="ti ti-user"></i> Officer selected
+            </span>` }
+          </div>
+          ${docFieldsHTML}
+          <div style="margin-top:14px;font-size:10.5px;color:var(--text-5);line-height:1.5;">
+            Values extracted via OCR/MRZ. Missing values require officer review.
+          </div>
+        </div>
 
       </div>
 
-    </div>
+      <!-- ③ OCR EXTRACTION -->
+      ${ocrSection}
+
+      <!-- ④ MRZ ANALYSIS -->
+      ${mrzSection}
+
+      <!-- ⑤ TAMPERING INDICATORS -->
+      ${tamperSection}
+
+      <!-- ⑥ VALIDATION CHECKS -->
+      ${checksSection}
+
+      <!-- ⑦ RISK ASSESSMENT -->
+      ${riskSection}
+
+      <!-- OFFICER ACTION -->
+      <div class="panel">
+        <div class="section-title">
+          <h3><i class="ti ti-user-check"></i> Officer Action</h3>
+        </div>
+        <div style="font-size:12.5px;color:var(--text-4);margin-bottom:16px;">
+          Review all extracted information and detected issues before recording the final decision.
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;">
+          <button class="btn btn-ghost" onclick="location.reload()">Discard</button>
+          <button class="btn btn-primary" onclick="alert('Decision recorded in the current prototype.')">
+            <i class="ti ti-check"></i> Confirm &amp; log decision
+          </button>
+        </div>
+      </div>
+
+    `;
 
-  </div>
-
-
-  <!-- EXTRACTED INFORMATION -->
-
-  <div
-    class="panel"
-    style="margin-bottom:16px;">
-
-    <div class="section-title">
-
-      <h3>
-
-        <i class="ti ti-file-description"></i>
-
-        Extracted information
-
-      </h3>
-
-    </div>
-
-
-    <div class="field-row">
-
-      <span style="color:var(--text-5);">
-        Name
-      </span>
-
-      <span style="color:var(--text-3);">
-
-        ${escapeHTML(name)}
-
-      </span>
-
-    </div>
-
-
-    <div class="field-row">
-
-      <span style="color:var(--text-5);">
-        Document number
-      </span>
-
-      <span
-        class="mono"
-        style="color:var(--cyan);">
-
-        ${escapeHTML(documentNumber)}
-
-      </span>
-
-    </div>
-
-
-    <div class="field-row">
-
-      <span style="color:var(--text-5);">
-        Dates found
-      </span>
-
-      <span style="color:var(--text-3);">
-
-        ${escapeHTML(datesText)}
-
-      </span>
-
-    </div>
-
-
-    <div
-      style="
-      margin-top:14px;
-      font-size:11px;
-      color:var(--text-5);">
-
-      Extracted fields are OCR/heuristic results and should be reviewed when accuracy is critical.
-
-    </div>
-
-  </div>
-
-
-  <!-- ISSUES -->
-
-  <div
-    class="panel"
-    style="margin-bottom:16px;">
-
-    <div class="section-title">
-
-      <h3>
-
-        <i class="ti ti-alert-triangle"></i>
-
-        Detected issues
-
-      </h3>
-
-    </div>
-
-
-    ${issuesHTML}
-
-  </div>
-
-
-  <!-- VERIFIED CHECKS -->
-
-  <div
-    class="panel"
-    style="margin-bottom:16px;">
-
-    <div class="section-title">
-
-      <h3>
-
-        <i class="ti ti-circle-check"></i>
-
-        Verified checks
-
-      </h3>
-
-    </div>
-
-
-    ${checksHTML}
-
-  </div>
-
-
-  <!-- OFFICER ACTION -->
-
-  <div class="panel">
-
-    <div class="section-title">
-
-      <h3>
-
-        <i class="ti ti-user-check"></i>
-
-        Officer action
-
-      </h3>
-
-    </div>
-
-
-    <div
-      style="
-      font-size:12.5px;
-      color:var(--text-4);
-      margin-bottom:16px;">
-
-      Review the screening result and record the final decision.
-
-    </div>
-
-
-    <div
-      style="
-      display:flex;
-      justify-content:flex-end;
-      gap:10px;
-      flex-wrap:wrap;">
-
-      <button
-        class="btn btn-ghost"
-        onclick="location.reload()">
-
-        Discard
-
-      </button>
-
-
-      <button
-        class="btn btn-primary"
-        onclick="alert('Decision recorded in the current prototype.')">
-
-        <i class="ti ti-check"></i>
-
-        Confirm & log decision
-
-      </button>
-
-    </div>
-
-  </div>
-
-  `;
-
-  } catch(error) {
-    console.error("Error in showResults:", error);
-    showBackendError("Frontend Error rendering results: " + error.message);
   }
+
+  catch(error){
+
+    console.error("Error in showResults:", error);
+
+    showBackendError(
+      "Frontend Error rendering results: " + error.message
+    );
+
+  }
+
 }
 
 </script>
