@@ -12,8 +12,14 @@ import time
 from datetime import date, datetime
 from typing import Optional
 
-import cv2
-import numpy as np
+# cv2 and numpy are heavy — lazy-loaded only when needed to avoid
+# cold-start penalty (58MB download) on Vercel serverless functions.
+try:
+    import cv2 as _cv2
+    import numpy as _np
+    _CV2_AVAILABLE = True
+except ImportError:
+    _CV2_AVAILABLE = False
 import requests
 from dotenv import load_dotenv
 
@@ -2692,61 +2698,40 @@ def run_validation(
 def preprocess_image_for_ocr(
     file_bytes: bytes,
 ) -> bytes:
-
-    image_array = np.frombuffer(
-        file_bytes,
-        dtype=np.uint8,
-    )
-
-    image = cv2.imdecode(
-        image_array,
-        cv2.IMREAD_COLOR,
-    )
-
-    if image is None:
+    """Pre-process image for better OCR. Skips gracefully if cv2 not available."""
+    if not _CV2_AVAILABLE:
+        # On Vercel serverless without cv2, just return the original bytes.
+        # OCR.space handles images well without pre-processing.
         return file_bytes
 
-    h, w = image.shape[:2]
+    try:
+        image_array = _np.frombuffer(file_bytes, dtype=_np.uint8)
+        image = _cv2.imdecode(image_array, _cv2.IMREAD_COLOR)
 
-    max_dim = 2000
+        if image is None:
+            return file_bytes
 
-    if max(h, w) > max_dim:
+        h, w = image.shape[:2]
+        max_dim = 2000
 
-        scale = max_dim / max(h, w)
+        if max(h, w) > max_dim:
+            scale = max_dim / max(h, w)
+            image = _cv2.resize(
+                image,
+                (int(w * scale), int(h * scale)),
+                interpolation=_cv2.INTER_AREA,
+            )
 
-        image = cv2.resize(
-            image,
-            (
-                int(w * scale),
-                int(h * scale),
-            ),
-            interpolation=cv2.INTER_AREA,
-        )
+        gray = _cv2.cvtColor(image, _cv2.COLOR_BGR2GRAY)
+        gray = _cv2.fastNlMeansDenoising(gray, h=30)
+        clahe = _cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray = clahe.apply(gray)
 
-    gray = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2GRAY,
-    )
-
-    gray = cv2.fastNlMeansDenoising(
-        gray,
-        h=30,
-    )
-
-    clahe = cv2.createCLAHE(
-        clipLimit=2.0,
-        tileGridSize=(8, 8),
-    )
-
-    gray = clahe.apply(gray)
-
-    success, encoded_img = cv2.imencode(
-        ".png",
-        gray,
-    )
-
-    if success:
-        return encoded_img.tobytes()
+        success, encoded_img = _cv2.imencode(".png", gray)
+        if success:
+            return encoded_img.tobytes()
+    except Exception as e:
+        print(f"Image preprocessing skipped: {e}")
 
     return file_bytes
 
@@ -2779,8 +2764,8 @@ def perform_ocr(
             "OCREngine": "2",
         }
 
-        max_retries = 2
-        base_delay = 1
+        max_retries = 1
+        base_delay = 0
 
         for attempt in range(max_retries):
 
@@ -2790,7 +2775,7 @@ def perform_ocr(
                     url,
                     files=files,
                     data=data,
-                    timeout=20,
+                    timeout=8,
                 )
 
                 if response.status_code in (
@@ -2855,11 +2840,12 @@ def perform_ocr(
                     f"{error}"
                 )
 
-                time.sleep(
-                    base_delay * (
-                        2 ** attempt
+                if base_delay > 0:
+                    time.sleep(
+                        base_delay * (
+                            2 ** attempt
+                        )
                     )
-                )
 
     # ========================================================
     # LOCAL FALLBACK
