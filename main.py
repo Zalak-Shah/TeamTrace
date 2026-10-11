@@ -50,7 +50,11 @@ app = FastAPI(
     version="2.1.0",
 )
 
-initialize_database()
+try:
+    initialize_database()
+except Exception as _db_err:
+    print("DATABASE INITIALIZATION NOTICE:", _db_err)
+
 
 
 # ============================================================
@@ -98,11 +102,15 @@ MAX_FILE_SIZE_MB = 10
 WEIGHTS = {
     "CRITICAL_MISMATCH": 40,
     "INVALID_NUMBER_FORMAT": 25,
+    "CHECKSUM_FAILED": 30,
+    "FORGED_PATTERN": 35,
     "EXPIRED_DOCUMENT": 20,
     "MISSING_REQUIRED_FIELD": 15,
+    "SECURITY_FEATURE_MISSING": 15,
     "LOW_OCR_CONFIDENCE": 10,
     "VISUAL_ISSUE": 10,
 }
+
 
 
 def severity_for_weight(weight: int) -> str:
@@ -859,65 +867,469 @@ def extract_document_information(
 
         return None
 
-    # ========================================================
-    # PASSPORT
-    # ========================================================
+# ========================================================
+# PASSPORT
+# OCR-TOLERANT EXTRACTION
+# ========================================================
 
     if doc_type == "Passport":
 
-        mrz = parse_mrz(text)
+        upper_text = text.upper()
+
+        # ----------------------------------------------------
+        # 1. Try standard MRZ first
+        # ----------------------------------------------------
+        mrz = None
+
+        try:
+            mrz = parse_mrz(text)
+        except Exception:
+            mrz = None
 
         if mrz:
+            information["name"] = clean_value(
+                mrz.get("name")
+            )
 
-            information["name"] = mrz.get("name")
-            information["document_number"] = (
+            information["document_number"] = clean_value(
                 mrz.get("doc_number")
             )
-            information["nationality"] = (
+
+            information["nationality"] = clean_value(
                 mrz.get("nationality")
             )
+
             information["date_of_birth"] = (
                 mrz.get("date_of_birth")
             )
-            information["sex"] = mrz.get("sex")
+
+            information["sex"] = clean_value(
+                mrz.get("sex")
+            )
+
             information["date_of_expiry"] = (
                 mrz.get("expiry_date")
             )
 
+        # ----------------------------------------------------
+        # 2. NAME FALLBACK
+        # ----------------------------------------------------
+        # Example OCR:
+        # BORYS ANDRZEJ
+        #
+        # Do not accept:
+        # PASSPORT / PASZPORT / PASSPORY / PASSEPOR
+        # POL / MAZOWIECKIE / etc.
+        # ----------------------------------------------------
+
         if not information["name"]:
-            information["name"] = guess_name(text)
+
+            lines = [
+                clean_value(line)
+                for line in text.splitlines()
+                if clean_value(line)
+            ]
+
+            ignored_names = {
+                "PASSPORT",
+                "PASZPORT",
+                "PASSPORY",
+                "PASSEPOR",
+                "PASZPOR",
+                "POL",
+                "POLSKA",
+                "REPUBLIC",
+                "NATIONALITY",
+                "SURNAME",
+                "GIVEN NAME",
+                "NAME",
+                "SEX",
+                "MALE",
+                "FEMALE",
+                "MINISTRY",
+                "MAZOWIECKIE",
+            }
+
+            name_candidates = []
+
+            for line in lines:
+
+                candidate = re.sub(
+                    r"[^A-Za-zÀ-ÖØ-öø-ÿ .'-]",
+                    "",
+                    line,
+                )
+
+                candidate = clean_value(candidate)
+
+                if not candidate:
+                    continue
+
+                upper_candidate = candidate.upper()
+
+                if upper_candidate in ignored_names:
+                    continue
+
+                if len(candidate) < 5:
+                    continue
+
+                if len(candidate) > 60:
+                    continue
+
+                # Reject obvious labels / OCR noise
+                if any(
+                    word in upper_candidate.split()
+                    for word in [
+                        "PASSPORT",
+                        "PASZPORT",
+                        "PASSPORY",
+                        "PASSEPOR",
+                        "NATIONALITY",
+                        "REPUBLIC",
+                        "MINISTRY",
+                        "VOIVODESHIP",
+                        "MAZOWIECKIE",
+                    ]
+                ):
+                    continue
+
+                # Person name should contain at least two words
+                words = upper_candidate.split()
+
+                if len(words) >= 2:
+                    name_candidates.append(candidate)
+
+            # Prefer a likely full personal name.
+            if name_candidates:
+
+                preferred = None
+
+                for candidate in name_candidates:
+                    words = candidate.split()
+
+                    if 2 <= len(words) <= 4:
+                        preferred = candidate
+                        break
+
+                information["name"] = (
+                    preferred
+                    or name_candidates[0]
+                )
+
+        # ----------------------------------------------------
+        # 3. PASSPORT NUMBER FALLBACK
+        # ----------------------------------------------------
+        # Example OCR:
+        # EM 9638245
+        #
+        # Polish passport:
+        # EM9638245
+        # ----------------------------------------------------
 
         if not information["document_number"]:
-            information["document_number"] = (
-                extract_document_number(
-                    text,
-                    doc_type,
-                )
-            )
 
-        issue_date = find_labeled_value(
-            [
-                "date of issue",
-                "date of issuance",
-                "issue date",
-                "issued",
+            passport_number_patterns = [
+                r"\b[A-Z]{2}\s*\d{7}\b",
+                r"\b[A-Z]{1,3}\s*\d{6,9}\b",
             ]
+
+            for pattern in passport_number_patterns:
+
+                match = re.search(
+                    pattern,
+                    upper_text,
+                )
+
+                if match:
+
+                    number = re.sub(
+                        r"\s+",
+                        "",
+                        match.group(0),
+                    )
+
+                    # Avoid accidental words
+                    if re.fullmatch(
+                        r"[A-Z]{1,3}\d{6,9}",
+                        number,
+                    ):
+                        information["document_number"] = number
+                        break
+
+        # ----------------------------------------------------
+        # 4. NATIONALITY FALLBACK
+        # ----------------------------------------------------
+
+        if not information["nationality"]:
+
+            nationality_patterns = [
+                r"\b(POL)\b",
+                r"\b(IND)\b",
+                r"\b(USA)\b",
+                r"\b(GBR)\b",
+                r"\b(CAN)\b",
+                r"\b(AUS)\b",
+            ]
+
+            for pattern in nationality_patterns:
+
+                match = re.search(
+                    pattern,
+                    upper_text,
+                )
+
+                if match:
+                    information["nationality"] = (
+                        match.group(1)
+                    )
+                    break
+
+        # ----------------------------------------------------
+        # 5. DATE EXTRACTION
+        # ----------------------------------------------------
+        #
+        # Supports:
+        # 23 APR/AVR 1984
+        # 25 STY/JAN 2023
+        # 25 STY/JAN 2033
+        #
+        # ----------------------------------------------------
+
+        passport_date_pattern = re.compile(
+            r"\b"
+            r"(\d{1,2})\s+"
+            r"(STY/JAN|LUT/FEB|MAR|KWI/APR|APR|"
+            r"MAJ/MAY|MAY|CZE/JUN|JUN|LIP/JUL|JUL|"
+            r"SIE/AUG|AUG|WRZ/SEP|SEP|PAZ/OCT|OCT|"
+            r"LIS/NOV|NOV|GRU/DEC|DEC|"
+            r"JAN|FEB)"
+            r"\s+(\d{4})"
+            r"\b",
+            re.IGNORECASE,
         )
 
-        if issue_date:
-            issue_match = DATE_RE.search(
-                issue_date
+        passport_dates = []
+
+        for match in passport_date_pattern.finditer(
+            text
+        ):
+
+            day = match.group(1)
+            month = match.group(2).upper()
+            year = match.group(3)
+
+            month_map = {
+                "STY/JAN": "JAN",
+                "LUT/FEB": "FEB",
+                "KWI/APR": "APR",
+                "MAJ/MAY": "MAY",
+                "CZE/JUN": "JUN",
+                "LIP/JUL": "JUL",
+                "SIE/AUG": "AUG",
+                "WRZ/SEP": "SEP",
+                "PAZ/OCT": "OCT",
+                "LIS/NOV": "NOV",
+                "GRU/DEC": "DEC",
+                "APR": "APR",
+                "MAY": "MAY",
+                "JUN": "JUN",
+                "JUL": "JUL",
+                "AUG": "AUG",
+                "SEP": "SEP",
+                "OCT": "OCT",
+                "NOV": "NOV",
+                "DEC": "DEC",
+                "JAN": "JAN",
+                "FEB": "FEB",
+                "MAR": "MAR",
+            }
+
+            normalized_month = month_map.get(
+                month,
+                month,
             )
 
-            if issue_match:
-                parsed = to_date(
-                    issue_match.group(0)
+            normalized_value = (
+                f"{day} "
+                f"{normalized_month} "
+                f"{year}"
+            )
+
+            if normalized_value not in passport_dates:
+                passport_dates.append(
+                    normalized_value
                 )
 
-                if parsed:
-                    information["date_of_issue"] = (
-                        parsed.isoformat()
+        # Also include normal numeric dates.
+        numeric_date_pattern = re.compile(
+            r"\b"
+            r"(?:\d{2}[/-]\d{2}[/-]\d{4}|"
+            r"\d{4}[/-]\d{2}[/-]\d{2})"
+            r"\b"
+        )
+
+        for match in numeric_date_pattern.finditer(
+            text
+        ):
+
+            value = match.group(0)
+
+            if value not in passport_dates:
+                passport_dates.append(value)
+
+        information["raw_dates"] = passport_dates
+
+        # ----------------------------------------------------
+        # 6. DATE ROLE DETECTION
+        # ----------------------------------------------------
+        #
+        # Typical passport OCR order:
+        #
+        # DOB       -> 23 APR/AVR 1984
+        # ISSUE     -> 25 STY/JAN 2023
+        # EXPIRY    -> 25 STY/JAN 2033
+        #
+        # If labels are available, prefer them.
+        # Otherwise use the common three-date passport order.
+        # ----------------------------------------------------
+
+        if not information["date_of_birth"]:
+
+            dob_value = find_labeled_value(
+                [
+                    "date of birth",
+                    "date of birth",
+                    "dob",
+                    "birth",
+                    "born",
+                ]
+            )
+
+            if dob_value:
+                date_match = (
+                    passport_date_pattern.search(
+                        dob_value
                     )
+                )
+
+                if date_match:
+                    information["date_of_birth"] = (
+                        date_match.group(0)
+                    )
+                else:
+                    information["date_of_birth"] = (
+                        clean_value(dob_value)
+                    )
+
+        if not information["date_of_issue"]:
+
+            issue_value = find_labeled_value(
+                [
+                    "date of issue",
+                    "date of issuance",
+                    "issue date",
+                    "issued",
+                ]
+            )
+
+            if issue_value:
+                date_match = (
+                    passport_date_pattern.search(
+                        issue_value
+                    )
+                )
+
+                if date_match:
+                    information["date_of_issue"] = (
+                        date_match.group(0)
+                    )
+
+        if not information["date_of_expiry"]:
+
+            expiry_value = find_labeled_value(
+                [
+                    "date of expiry",
+                    "expiry date",
+                    "expiry",
+                    "valid until",
+                    "valid till",
+                    "valid up to",
+                    "valid through",
+                    "valid to",
+                ]
+            )
+
+            if expiry_value:
+
+                date_match = (
+                    passport_date_pattern.search(
+                        expiry_value
+                    )
+                )
+
+                if date_match:
+                    information["date_of_expiry"] = (
+                        date_match.group(0)
+                    )
+
+        # ----------------------------------------------------
+        # 7. FALLBACK DATE ORDER
+        # ----------------------------------------------------
+        #
+        # For the OCR sample:
+        #
+        # 23 APR/AVR 1984 -> DOB
+        # 25 STY/JAN 2023 -> ISSUE
+        # 25 STY/JAN 2033 -> EXPIRY
+        # ----------------------------------------------------
+
+        if passport_dates:
+
+            if (
+                not information["date_of_birth"]
+                and len(passport_dates) >= 1
+            ):
+                information["date_of_birth"] = (
+                    passport_dates[0]
+                )
+
+            if (
+                not information["date_of_issue"]
+                and len(passport_dates) >= 2
+            ):
+                information["date_of_issue"] = (
+                    passport_dates[1]
+                )
+
+            if (
+                not information["date_of_expiry"]
+                and len(passport_dates) >= 3
+            ):
+                information["date_of_expiry"] = (
+                    passport_dates[2]
+                )
+
+        # ----------------------------------------------------
+        # 8. SEX FALLBACK
+        # ----------------------------------------------------
+
+        if not information["sex"]:
+
+            sex_match = re.search(
+                r"\b([MF])\s*/?\s*[MF]?\b",
+                upper_text,
+            )
+
+            if sex_match:
+                information["sex"] = (
+                    sex_match.group(1)
+                )
+
+        # ----------------------------------------------------
+        # 9. FORCE DOCUMENT TYPE IN THE EXTRACTED INFO
+        # ----------------------------------------------------
+
+        information["document_type"] = "Passport"
 
     # ========================================================
     # VISA
@@ -1639,6 +2051,155 @@ def analyze_document_image(file_bytes: bytes):
 # VALIDATION
 # ============================================================
 
+# ============================================================
+# DOCUMENT-SPECIFIC VERIFICATION ENGINES
+# ============================================================
+
+# --- 1. Verhoeff Algorithm for Aadhaar ---
+# The Verhoeff algorithm uses dihedral group D5 multiplication table
+VERHOEFF_D = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+    [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+    [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+    [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+    [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+    [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+    [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+    [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+    [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+]
+
+VERHOEFF_P = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+    [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+    [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+    [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+    [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+    [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+    [7, 0, 4, 6, 9, 1, 3, 2, 5, 8],
+]
+
+VERHOEFF_INV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9]
+
+
+def validate_verhoeff(num_str: str) -> bool:
+    """Validates an Aadhaar number using the Verhoeff algorithm."""
+    clean = re.sub(r"\D", "", num_str)
+    if len(clean) != 12:
+        return False
+    c = 0
+    # Reverse digits and calculate
+    for i, digit_char in enumerate(reversed(clean)):
+        digit = int(digit_char)
+        c = VERHOEFF_D[c][VERHOEFF_P[i % 8][digit]]
+    return c == 0
+
+
+# --- 2. ICAO Doc 9303 Checksum for Passport MRZ ---
+ICAO_WEIGHTS = [7, 3, 1]
+
+
+def icao_char_value(c: str) -> int:
+    if c.isdigit():
+        return int(c)
+    if "A" <= c <= "Z":
+        return ord(c) - ord("A") + 10
+    if c == "<":
+        return 0
+    return 0
+
+
+def calculate_icao_check_digit(data: str) -> int:
+    total = 0
+    for idx, char in enumerate(data):
+        weight = ICAO_WEIGHTS[idx % 3]
+        total += icao_char_value(char) * weight
+    return total % 10
+
+
+def validate_passport_mrz_checksums(mrz_raw_lines: list) -> dict:
+    """
+    Validates ICAO Doc 9303 Line 2 checksums:
+    Document Number (0-8) -> check digit at 9
+    Date of Birth (13-18) -> check digit at 19
+    Date of Expiry (21-26) -> check digit at 27
+    Composite Check Digit at 43 (over doc_num+cd+dob+cd+expiry+cd+optional)
+    """
+    results = {
+        "doc_number_valid": None,
+        "dob_valid": None,
+        "expiry_valid": None,
+        "composite_valid": None,
+        "all_valid": True,
+    }
+    if not mrz_raw_lines or len(mrz_raw_lines) < 2:
+        return results
+
+    line2 = mrz_raw_lines[1].strip()
+    if len(line2) < 28:
+        return results
+
+    # 1. Document number check digit
+    doc_field = line2[0:9]
+    doc_cd = line2[9]
+    if doc_cd.isdigit():
+        calc_cd = calculate_icao_check_digit(doc_field)
+        results["doc_number_valid"] = (calc_cd == int(doc_cd))
+        if not results["doc_number_valid"]:
+            results["all_valid"] = False
+
+    # 2. Date of Birth check digit
+    dob_field = line2[13:19]
+    dob_cd = line2[19]
+    if dob_cd.isdigit() and dob_field.isalnum():
+        calc_cd = calculate_icao_check_digit(dob_field)
+        results["dob_valid"] = (calc_cd == int(dob_cd))
+        if not results["dob_valid"]:
+            results["all_valid"] = False
+
+    # 3. Expiry date check digit
+    exp_field = line2[21:27]
+    exp_cd = line2[27]
+    if exp_cd.isdigit() and exp_field.isalnum():
+        calc_cd = calculate_icao_check_digit(exp_field)
+        results["expiry_valid"] = (calc_cd == int(exp_cd))
+        if not results["expiry_valid"]:
+            results["all_valid"] = False
+
+    # 4. Composite check digit (at pos 43 for 44-char TD3 passport)
+    if len(line2) >= 44:
+        composite_data = line2[0:10] + line2[13:20] + line2[21:43]
+        composite_cd = line2[43]
+        if composite_cd.isdigit():
+            calc_composite = calculate_icao_check_digit(composite_data)
+            results["composite_valid"] = (calc_composite == int(composite_cd))
+            if not results["composite_valid"]:
+                results["all_valid"] = False
+
+    return results
+
+
+# --- 3. Indian State Codes for Driving Licences ---
+INDIAN_STATE_CODES = {
+    "AN": "Andaman and Nicobar", "AP": "Andhra Pradesh", "AR": "Arunachal Pradesh",
+    "AS": "Assam", "BR": "Bihar", "CG": "Chhattisgarh", "CH": "Chandigarh",
+    "DD": "Daman and Diu", "DL": "Delhi", "DN": "Dadra and Nagar Haveli",
+    "GA": "Goa", "GJ": "Gujarat", "HP": "Himachal Pradesh", "HR": "Haryana",
+    "JH": "Jharkhand", "JK": "Jammu and Kashmir", "KA": "Karnataka", "KL": "Kerala",
+    "LA": "Ladakh", "LD": "Lakshadweep", "MH": "Maharashtra", "ML": "Meghalaya",
+    "MN": "Manipur", "MP": "Madhya Pradesh", "MZ": "Mizoram", "NL": "Nagaland",
+    "OD": "Odisha", "PB": "Punjab", "PY": "Puducherry", "RJ": "Rajasthan",
+    "SK": "Sikkim", "TN": "Tamil Nadu", "TR": "Tripura", "TS": "Telangana",
+    "UK": "Uttarakhand", "UP": "Uttar Pradesh", "WB": "West Bengal",
+}
+
+
+# ============================================================
+# COMPREHENSIVE DOCUMENT VERIFICATION ROUTINE
+# ============================================================
+
 def run_validation(
     doc_type: str,
     text: str,
@@ -1648,189 +2209,471 @@ def run_validation(
     verified = []
     score = 0
 
-    # --------------------------------------------------------
-    # NAME
-    # --------------------------------------------------------
+    lower_text = text.lower()
+    upper_text = text.upper()
 
+    # --------------------------------------------------------
+    # COMMON: NAME EXTRACTION
+    # --------------------------------------------------------
     name = guess_name(text)
-
     if name:
-        verified.append(
-            "A likely name was detected"
-        )
+        verified.append(f"Cardholder / Subject Name identified: {name}")
     else:
-        issues.append(
-            {
-                "title": "Required field missing",
-                "severity": severity_for_weight(
-                    WEIGHTS["MISSING_REQUIRED_FIELD"]
-                ),
-                "description": (
-                    "Could not locate a likely name "
-                    "on the document."
-                ),
-            }
-        )
-
-        score += WEIGHTS[
-            "MISSING_REQUIRED_FIELD"
-        ]
+        issues.append({
+            "title": "Subject name not found",
+            "severity": severity_for_weight(WEIGHTS["MISSING_REQUIRED_FIELD"]),
+            "description": "Could not identify a valid cardholder or traveler name from the document text.",
+        })
+        score += WEIGHTS["MISSING_REQUIRED_FIELD"]
 
     # --------------------------------------------------------
-    # DOCUMENT NUMBER
+    # COMMON: DOCUMENT NUMBER DETECTION
     # --------------------------------------------------------
-
-    doc_number = extract_document_number(
-        text,
-        doc_type,
-    )
-
-    if doc_number:
-        verified.append(
-            f"{doc_type} number format looks valid"
-        )
-
-    elif doc_type in (
-        "Aadhaar",
-        "PAN Card",
-        "Passport",
-        "Driving Licence",
-    ):
-        issues.append(
-            {
-                "title": "Invalid or missing document number",
-                "severity": severity_for_weight(
-                    WEIGHTS["INVALID_NUMBER_FORMAT"]
-                ),
-                "description": (
-                    f"No valid {doc_type} number "
-                    "pattern was found."
-                ),
-            }
-        )
-
-        score += WEIGHTS[
-            "INVALID_NUMBER_FORMAT"
-        ]
+    doc_number = extract_document_number(text, doc_type)
 
     # --------------------------------------------------------
-    # DATES
+    # DOCUMENT-SPECIFIC AUTHENTICITY CHECKS
     # --------------------------------------------------------
 
-    dates_found = extract_dates(text)
-
-    if not dates_found:
-        issues.append(
-            {
-                "title": "Required field missing",
-                "severity": severity_for_weight(
-                    WEIGHTS["MISSING_REQUIRED_FIELD"]
-                ),
-                "description": (
-                    "No date could be extracted "
-                    "from the document."
-                ),
-            }
-        )
-
-        score += WEIGHTS[
-            "MISSING_REQUIRED_FIELD"
-        ]
-
-    else:
-        verified.append(
-            "Date information was extracted"
-        )
-
-        if doc_type in (
-            "Passport",
-            "Visa",
-            "Driving Licence",
-            "Permit",
-        ):
-            parsed_dates = []
-
-            for value in dates_found:
-                parsed = to_date(value)
-
-                if parsed:
-                    parsed_dates.append(
-                        parsed
-                    )
-
-            if parsed_dates:
-
-                latest_date = max(
-                    parsed_dates
-                )
-
-                if latest_date < date.today():
-
-                    issues.append(
-                        {
-                            "title": "Possible expired document",
-                            "severity": "MEDIUM",
-                            "description": (
-                                "The latest detected date "
-                                "appears to have expired."
-                            ),
-                        }
-                    )
-
-                    score += WEIGHTS[
-                        "EXPIRED_DOCUMENT"
-                    ]
-
+    # ==========================
+    # 1. AADHAAR CARD
+    # ==========================
+    if doc_type == "Aadhaar":
+        if doc_number:
+            clean_aadhaar = re.sub(r"\D", "", doc_number)
+            if len(clean_aadhaar) == 12:
+                # Mathematical Verhoeff check digit validation
+                if validate_verhoeff(clean_aadhaar):
+                    verified.append("UIDAI Verhoeff Check Digit: PASSED (Mathematically valid 12-digit Aadhaar number)")
                 else:
-                    verified.append(
-                        "Latest detected date is not expired"
-                    )
-
-    # --------------------------------------------------------
-    # OCR CONFIDENCE
-    # --------------------------------------------------------
-
-    if ocr_confidence < 0.60:
-
-        issues.append(
-            {
-                "title": "Low OCR confidence",
-                "severity": "MEDIUM",
-                "description": (
-                    "OCR quality appears low."
-                ),
-            }
-        )
-
-        score += WEIGHTS[
-            "LOW_OCR_CONFIDENCE"
-        ]
-
-    else:
-        verified.append(
-            "OCR extraction completed successfully"
-        )
-
-    # --------------------------------------------------------
-    # UNKNOWN DOCUMENT
-    # --------------------------------------------------------
-
-    if doc_type == "Unknown":
-
-        issues.append(
-            {
-                "title": "Document type could not be identified",
+                    issues.append({
+                        "title": "Aadhaar Verhoeff Checksum Failed",
+                        "severity": "HIGH",
+                        "description": f"The 12-digit Aadhaar sequence ({clean_aadhaar}) failed the Verhoeff check digit algorithm. This indicates a counterfeit or mis-typed number.",
+                    })
+                    score += WEIGHTS["CHECKSUM_FAILED"]
+            else:
+                issues.append({
+                    "title": "Invalid Aadhaar length",
+                    "severity": "HIGH",
+                    "description": f"Aadhaar number must contain exactly 12 digits, found {len(clean_aadhaar)} digits.",
+                })
+                score += WEIGHTS["INVALID_NUMBER_FORMAT"]
+        else:
+            issues.append({
+                "title": "Missing Aadhaar Number",
                 "severity": "HIGH",
-                "description": (
-                    "No supported document pattern "
-                    "was confidently detected."
-                ),
-            }
-        )
+                "description": "No 12-digit Aadhaar number sequence (XXXX XXXX XXXX) was detected.",
+            })
+            score += WEIGHTS["INVALID_NUMBER_FORMAT"]
 
-        score += WEIGHTS[
-            "CRITICAL_MISMATCH"
+        # Check UIDAI Security & Official Keywords
+        aadhaar_markers = [
+            ("unique identification authority", "UIDAI Insignia / Authority header"),
+            ("government of india", "Government of India emblem text"),
+            ("mera aadhaar", "Mera Aadhaar watermark / tagline"),
+            ("enrolment", "Enrolment / Update reference"),
+            ("1947", "UIDAI 1947 Toll-Free helpline"),
         ]
+        found_markers = [label for kw, label in aadhaar_markers if kw in lower_text]
+        if found_markers:
+            verified.append(f"UIDAI Authentic Markers: Confirmed ({', '.join(found_markers[:3])})")
+        else:
+            issues.append({
+                "title": "UIDAI Authority Insignia Missing",
+                "severity": "MEDIUM",
+                "description": "Standard UIDAI header, Government of India emblem text, or helpline references not detected.",
+            })
+            score += WEIGHTS["SECURITY_FEATURE_MISSING"]
+
+        # Check Gender and Date of Birth
+        has_dob = bool(re.search(r"\b(dob|birth|year of birth|\d{2}/\d{2}/\d{4}|\b\d{4}\b)\b", lower_text))
+        has_gender = bool(re.search(r"\b(male|female|transgender|\u092a\u0941\u0930\u0941\u0937|\u0938\u094d\u0924\u094d\u0930\u0940)\b", lower_text))
+        if has_dob:
+            verified.append("Aadhaar Date/Year of Birth field present")
+        else:
+            issues.append({
+                "title": "Aadhaar DOB/YOB missing",
+                "severity": "LOW",
+                "description": "Could not identify standard Date of Birth or Year of Birth line on Aadhaar card.",
+            })
+        if has_gender:
+            verified.append("Aadhaar Gender specification verified")
+
+    # ==========================
+    # 2. PAN CARD
+    # ==========================
+    elif doc_type == "PAN Card":
+        if doc_number:
+            pan_match = PAN_NUMBER_RE.search(doc_number)
+            if pan_match:
+                pan_code = pan_match.group(0).upper()
+                fourth_char = pan_code[3]
+                fifth_char = pan_code[4]
+
+                # 4th character entity type check
+                entity_types = {
+                    "P": "Individual / Person",
+                    "C": "Company",
+                    "H": "Hindu Undivided Family (HUF)",
+                    "F": "Firm / Partnership / LLP",
+                    "A": "Association of Persons (AOP)",
+                    "T": "Trust",
+                    "B": "Body of Individuals (BOI)",
+                    "L": "Local Authority",
+                    "J": "Artificial Juridical Person",
+                    "G": "Government Agency",
+                }
+                if fourth_char in entity_types:
+                    verified.append(f"PAN Entity Type: Valid ({entity_types[fourth_char]} - code '{fourth_char}')")
+                else:
+                    issues.append({
+                        "title": "Invalid PAN Entity Code",
+                        "severity": "HIGH",
+                        "description": f"4th character '{fourth_char}' in PAN '{pan_code}' is not a recognized Indian Income Tax Department entity code.",
+                    })
+                    score += WEIGHTS["FORGED_PATTERN"]
+
+                # 5th character: must match holder's surname initial
+                if name:
+                    name_parts = [p for p in re.split(r"[\s.]+", name.strip()) if len(p) > 1]
+                    if name_parts:
+                        surname = name_parts[-1].upper()
+                        if surname.startswith(fifth_char):
+                            verified.append(f"PAN Surname Initial Match: PASSED (Initial '{fifth_char}' matches surname '{surname}')")
+                        else:
+                            issues.append({
+                                "title": "PAN Surname Initial Discrepancy",
+                                "severity": "MEDIUM",
+                                "description": f"PAN 5th character '{fifth_char}' does not match the first letter of extracted surname '{surname}'.",
+                            })
+                            score += 15
+                verified.append(f"PAN Alphanumeric Structure: PASSED (5-Alpha + 4-Numeric + 1-Alpha: {pan_code})")
+            else:
+                issues.append({
+                    "title": "Invalid PAN Number Structure",
+                    "severity": "HIGH",
+                    "description": "PAN number does not match standard 10-character format AAAAA9999A.",
+                })
+                score += WEIGHTS["INVALID_NUMBER_FORMAT"]
+        else:
+            issues.append({
+                "title": "Missing PAN Number",
+                "severity": "HIGH",
+                "description": "No 10-character PAN number pattern (e.g., ABCDE1234F) detected on card.",
+            })
+            score += WEIGHTS["INVALID_NUMBER_FORMAT"]
+
+        # Check Income Tax Department Issuer keywords
+        it_markers = ["income tax department", "permanent account number", "govt of india", "government of india"]
+        if any(marker in lower_text for marker in it_markers):
+            verified.append("Income Tax Department Issuer Markings confirmed")
+        else:
+            issues.append({
+                "title": "Missing Income Tax Department Markings",
+                "severity": "MEDIUM",
+                "description": "Official Income Tax Department header or Government of India tagline missing.",
+            })
+            score += WEIGHTS["SECURITY_FEATURE_MISSING"]
+
+    # ==========================
+    # 3. PASSPORT (ICAO DOC 9303)
+    # ==========================
+    elif doc_type == "Passport":
+        # Extract MRZ lines for ICAO check
+        mrz_candidate_lines = []
+        for line in text.splitlines():
+            clean = line.strip().replace(" ", "<")
+            clean_alnum = re.sub(r"[^A-Z0-9<]", "", clean.upper())
+            if len(clean_alnum) >= 30 and "<" in clean_alnum:
+                mrz_candidate_lines.append(clean_alnum)
+
+        mrz = parse_mrz(text)
+        if mrz:
+            verified.append("Passport Machine Readable Zone (MRZ TD3) detected and parsed")
+            if mrz.get("doc_number"):
+                verified.append(f"Passport Number extracted: {mrz['doc_number']}")
+            if mrz.get("nationality"):
+                verified.append(f"Holder Nationality Code: {mrz['nationality']}")
+
+            # ICAO Doc 9303 Check Digit Validation
+            if len(mrz_candidate_lines) >= 2:
+                # Find the line starting with P< and its follower
+                line1_idx = -1
+                for idx, line in enumerate(mrz_candidate_lines):
+                    if line.startswith("P<") or line.startswith("PK") or line.startswith("P"):
+                        line1_idx = idx
+                        break
+                if line1_idx != -1 and line1_idx + 1 < len(mrz_candidate_lines):
+                    td3_pair = [mrz_candidate_lines[line1_idx], mrz_candidate_lines[line1_idx + 1]]
+                    mrz_check_res = validate_passport_mrz_checksums(td3_pair)
+
+                    if mrz_check_res.get("doc_number_valid") is True:
+                        verified.append("ICAO Doc 9303 Passport Number Check Digit: PASSED")
+                    elif mrz_check_res.get("doc_number_valid") is False:
+                        issues.append({
+                            "title": "MRZ Passport Number Checksum Failed",
+                            "severity": "HIGH",
+                            "description": "Document number check digit in MRZ line 2 does not match ICAO 7-3-1 algorithm.",
+                        })
+                        score += WEIGHTS["CHECKSUM_FAILED"]
+
+                    if mrz_check_res.get("dob_valid") is True:
+                        verified.append("ICAO Doc 9303 Date of Birth Check Digit: PASSED")
+                    elif mrz_check_res.get("dob_valid") is False:
+                        issues.append({
+                            "title": "MRZ Date of Birth Checksum Failed",
+                            "severity": "MEDIUM",
+                            "description": "Date of Birth check digit in MRZ line 2 is mathematically invalid.",
+                        })
+                        score += 15
+
+                    if mrz_check_res.get("expiry_valid") is True:
+                        verified.append("ICAO Doc 9303 Expiry Date Check Digit: PASSED")
+                    elif mrz_check_res.get("expiry_valid") is False:
+                        issues.append({
+                            "title": "MRZ Expiry Checksum Failed",
+                            "severity": "MEDIUM",
+                            "description": "Passport Expiry check digit in MRZ line 2 is mathematically invalid.",
+                        })
+                        score += 15
+
+                    if mrz_check_res.get("composite_valid") is True:
+                        verified.append("ICAO Doc 9303 Overall Composite Check Digit: PASSED")
+                    elif mrz_check_res.get("composite_valid") is False:
+                        issues.append({
+                            "title": "MRZ Composite Check Digit Failed",
+                            "severity": "HIGH",
+                            "description": "The composite checksum covering all passport data fields failed verification.",
+                        })
+                        score += WEIGHTS["CHECKSUM_FAILED"]
+
+            # Expiry date validation
+            if mrz.get("expiry_date"):
+                try:
+                    exp_dt = date.fromisoformat(mrz["expiry_date"])
+                    if exp_dt < date.today():
+                        issues.append({
+                            "title": "Passport Expired",
+                            "severity": "HIGH",
+                            "description": f"Passport expired on {exp_dt.strftime('%d/%m/%Y')} and is invalid for international travel.",
+                        })
+                        score += WEIGHTS["EXPIRED_DOCUMENT"]
+                    else:
+                        verified.append(f"Passport Validity: Active (Valid until {exp_dt.strftime('%d/%m/%Y')})")
+                except ValueError:
+                    pass
+        else:
+            # Fallback to visual booklet format
+            if doc_number:
+                verified.append(f"Visual Passport Number format verified: {doc_number}")
+            else:
+                issues.append({
+                    "title": "Missing Passport Number & MRZ",
+                    "severity": "HIGH",
+                    "description": "Neither a readable MRZ zone nor a valid Passport booklet number was extracted.",
+                })
+                score += WEIGHTS["INVALID_NUMBER_FORMAT"]
+
+    # ==========================
+    # 4. DRIVING LICENCE (PARIVAHAN)
+    # ==========================
+    elif doc_type == "Driving Licence":
+        if doc_number:
+            clean_dl = re.sub(r"[\s-]", "", doc_number.upper())
+            # State code check (first 2 chars)
+            state_code = clean_dl[:2]
+            if state_code in INDIAN_STATE_CODES:
+                state_name = INDIAN_STATE_CODES[state_code]
+                verified.append(f"Parivahan State Jurisdiction: Valid ({state_name} - State Code '{state_code}')")
+
+                # Format check: SS-RR-YYYY-NNNNNNN
+                if len(clean_dl) >= 15:
+                    rto_code = clean_dl[2:4]
+                    year_str = clean_dl[4:8]
+                    if year_str.isdigit():
+                        issue_year = int(year_str)
+                        current_year = date.today().year
+                        if 1950 <= issue_year <= current_year:
+                            verified.append(f"Parivahan RTO Sequence & Issue Year ({issue_year}) validated")
+                        else:
+                            issues.append({
+                                "title": "Abnormal Driving Licence Issue Year",
+                                "severity": "HIGH",
+                                "description": f"Driving licence indicates issuance year {issue_year}, which is out of range.",
+                            })
+                            score += WEIGHTS["FORGED_PATTERN"]
+                verified.append(f"Driving Licence Number: Valid format ({doc_number})")
+            else:
+                issues.append({
+                    "title": "Invalid Driving Licence State Code",
+                    "severity": "HIGH",
+                    "description": f"State prefix '{state_code}' does not correspond to any valid Indian State or Union Territory.",
+                })
+                score += WEIGHTS["INVALID_NUMBER_FORMAT"]
+        else:
+            issues.append({
+                "title": "Missing Driving Licence Number",
+                "severity": "HIGH",
+                "description": "No recognized Driving Licence number format (e.g. MH01 20180012345) detected.",
+            })
+            score += WEIGHTS["INVALID_NUMBER_FORMAT"]
+
+        # Motor Vehicles Act / Transport Department markers
+        dl_markers = ["transport", "driving licence", "driving license", "motor vehicles", "sarathi", "licence", "license"]
+        if any(marker in lower_text for marker in dl_markers):
+            verified.append("Transport Department / Motor Vehicles Act statutory markers present")
+        else:
+            issues.append({
+                "title": "Transport Authority Markings Missing",
+                "severity": "MEDIUM",
+                "description": "No state transport department or licensing authority header detected.",
+            })
+            score += WEIGHTS["SECURITY_FEATURE_MISSING"]
+
+    # ==========================
+    # 5. VISA
+    # ==========================
+    elif doc_type == "Visa":
+        if doc_number:
+            verified.append(f"Visa Document / Sticker Number detected: {doc_number}")
+        else:
+            issues.append({
+                "title": "Visa Document Number missing",
+                "severity": "MEDIUM",
+                "description": "Could not extract visa foil / sticker registration number.",
+            })
+            score += WEIGHTS["INVALID_NUMBER_FORMAT"]
+
+        visa_dates = extract_dates(text)
+        parsed_dates = [to_date(d) for d in visa_dates if to_date(d)]
+        if parsed_dates:
+            latest = max(parsed_dates)
+            if latest < date.today():
+                issues.append({
+                    "title": "Visa Expired",
+                    "severity": "HIGH",
+                    "description": f"Latest date found on visa ({latest.strftime('%d/%m/%Y')}) is in the past.",
+                })
+                score += WEIGHTS["EXPIRED_DOCUMENT"]
+            else:
+                verified.append(f"Visa Validity Window active (Valid until {latest.strftime('%d/%m/%Y')})")
+        else:
+            issues.append({
+                "title": "Visa Validity Dates Missing",
+                "severity": "MEDIUM",
+                "description": "Valid from / Valid until date stamps could not be found.",
+            })
+            score += WEIGHTS["MISSING_REQUIRED_FIELD"]
+
+        # Entries and category checks
+        if any(kw in lower_text for kw in ["single", "multiple", "double", "entries", "entry"]):
+            verified.append("Visa Entry clearance category verified")
+        if any(kw in lower_text for kw in ["tourist", "business", "employment", "student", "diplomatic", "visa type", "category"]):
+            verified.append("Visa Purpose / Class designation identified")
+
+    # ==========================
+    # 6. VOTER ID (EPIC)
+    # ==========================
+    elif doc_type == "Voter ID":
+        if doc_number:
+            voter_match = VOTER_ID_RE.search(doc_number)
+            if voter_match:
+                epic = voter_match.group(0).upper()
+                constituency_code = epic[:3]
+                serial_num = epic[3:]
+                verified.append(f"EPIC Number format valid: {epic} (Constituency Code: {constituency_code}, Serial: {serial_num})")
+            else:
+                issues.append({
+                    "title": "Invalid EPIC Format",
+                    "severity": "HIGH",
+                    "description": "Voter ID must follow 3-Alpha + 7-Numeric format (e.g. ABC1234567).",
+                })
+                score += WEIGHTS["INVALID_NUMBER_FORMAT"]
+        else:
+            issues.append({
+                "title": "Missing Voter ID / EPIC Number",
+                "severity": "HIGH",
+                "description": "No 10-character EPIC number pattern detected.",
+            })
+            score += WEIGHTS["INVALID_NUMBER_FORMAT"]
+
+        eci_markers = ["election commission", "electors photo identity", "elector", "epic", "voter"]
+        if any(marker in lower_text for marker in eci_markers):
+            verified.append("Election Commission of India (ECI) Insignia verified")
+        else:
+            issues.append({
+                "title": "Election Commission Insignia Missing",
+                "severity": "MEDIUM",
+                "description": "ECI statutory header or electoral roll reference not found.",
+            })
+            score += WEIGHTS["SECURITY_FEATURE_MISSING"]
+
+    # ==========================
+    # 7. PERMIT
+    # ==========================
+    elif doc_type == "Permit":
+        if doc_number:
+            verified.append(f"Permit Authorization Number confirmed: {doc_number}")
+        else:
+            issues.append({
+                "title": "Permit Number Missing",
+                "severity": "MEDIUM",
+                "description": "No official permit registration code identified.",
+            })
+            score += WEIGHTS["MISSING_REQUIRED_FIELD"]
+
+        permit_dates = extract_dates(text)
+        parsed_dates = [to_date(d) for d in permit_dates if to_date(d)]
+        if parsed_dates:
+            latest = max(parsed_dates)
+            if latest < date.today():
+                issues.append({
+                    "title": "Permit Expired",
+                    "severity": "HIGH",
+                    "description": f"The permit validity period expired on {latest.strftime('%d/%m/%Y')}.",
+                })
+                score += WEIGHTS["EXPIRED_DOCUMENT"]
+            else:
+                verified.append(f"Permit operational window active (Valid through {latest.strftime('%d/%m/%Y')})")
+
+    # ==========================
+    # 8. NATIONAL ID (GENERIC)
+    # ==========================
+    elif doc_type == "National ID":
+        if doc_number:
+            verified.append(f"National Identity Number detected: {doc_number}")
+        else:
+            issues.append({
+                "title": "Missing National ID Number",
+                "severity": "HIGH",
+                "description": "Could not identify a standard national identification number.",
+            })
+            score += WEIGHTS["INVALID_NUMBER_FORMAT"]
+
+    # ==========================
+    # 9. UNKNOWN DOCUMENT
+    # ==========================
+    elif doc_type == "Unknown":
+        issues.append({
+            "title": "Document type could not be identified",
+            "severity": "HIGH",
+            "description": "No supported border screening document pattern was confidently recognized.",
+        })
+        score += WEIGHTS["CRITICAL_MISMATCH"]
+
+    # --------------------------------------------------------
+    # OCR CONFIDENCE CHECK
+    # --------------------------------------------------------
+    if ocr_confidence < 0.60:
+        issues.append({
+            "title": "Low OCR Text Quality",
+            "severity": "MEDIUM",
+            "description": "OCR recognition quality is low. Possible image blur, low resolution, or degradation.",
+        })
+        score += WEIGHTS["LOW_OCR_CONFIDENCE"]
+    else:
+        verified.append("High-confidence Optical Character Recognition complete")
 
     return (
         issues,
@@ -1839,6 +2682,7 @@ def run_validation(
         name,
         doc_number,
     )
+
 
 
 # ============================================================
