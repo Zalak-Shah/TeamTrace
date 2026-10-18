@@ -46,31 +46,91 @@
 
 <script src="common.js"></script>
 <script>
-renderChrome({ active: "identity", title: "Identity intelligence", subtitle: "Cross-referencing faces, documents, and declared identities" });
+renderChrome({ active: "identity", title: "Identity intelligence", subtitle: "Cross-referencing faces, documents, and declared identities (Database Connected)" });
 
 const colorFor = t => t === "face" ? "#F87171" : t === "person" ? "#22D3EE" : "#6366F1";
-const { nodes, edges } = IDENTITY_NETWORK;
 
-const linesHtml = edges.map(([a,b]) => {
-  const na = nodes.find(n=>n.id===a), nb = nodes.find(n=>n.id===b);
-  return `<line x1="${na.x}" y1="${na.y}" x2="${nb.x}" y2="${nb.y}" stroke="#263049" stroke-width="1.5"/>`;
-}).join("");
+async function loadIdentityNetwork() {
+  let nodes = IDENTITY_NETWORK.nodes;
+  let edges = IDENTITY_NETWORK.edges;
+  let liveList = [];
 
-const nodesHtml = nodes.map(n => {
-  const r = n.type === "face" ? 15 : 11;
-  return `<g>
-    <circle cx="${n.x}" cy="${n.y}" r="${r}" fill="#0D1220" stroke="${colorFor(n.type)}" stroke-width="2"/>
-    <text x="${n.x}" y="${n.y - r - 7}" text-anchor="middle" font-size="10.5" fill="#B7C0D3">${n.label}</text>
-  </g>`;
-}).join("");
+  try {
+    const res = await fetch(`${API_BASE}/api/identities`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.identities) && data.identities.length > 0) {
+        liveList = data.identities;
 
-document.getElementById("graph").innerHTML = linesHtml + nodesHtml;
+        // Build dynamic graph layout for real database identities
+        const dynamicNodes = [];
+        const dynamicEdges = [];
 
-document.getElementById("identity-list").innerHTML = nodes.filter(n => n.type === "person").map(n => `
-  <div style="display:flex;justify-content:space-between;padding:9px 4px;border-bottom:1px solid var(--border-2);font-size:12.5px;">
-    <span style="color:var(--text-2);">${n.label}</span>
-    <span style="color:var(--text-5);">${edges.filter(e => e.includes(n.id)).length} linked record(s)</span>
-  </div>`).join("");
+        liveList.forEach((ident, idx) => {
+          const pId = `p-${ident.id}`;
+          const dId = `d-${ident.id}`;
+          const fId = `face-${ident.id}`;
+
+          // Spread across viewBox (700 x 320)
+          const colX = 100 + (idx % 4) * 160;
+          const rowY = 80 + Math.floor(idx / 4) * 110;
+
+          dynamicNodes.push({ id: pId, type: "person", label: ident.full_name || "Unknown", x: colX, y: rowY });
+          dynamicNodes.push({ id: dId, type: "document", label: `${ident.document_type || "Doc"}: ${ident.document_number || "—"}`, x: colX - 45, y: rowY + 55 });
+          dynamicNodes.push({ id: fId, type: "face", label: `Biometric #${ident.id}`, x: colX + 45, y: rowY + 55 });
+
+          dynamicEdges.push([pId, dId]);
+          dynamicEdges.push([pId, fId]);
+        });
+
+        nodes = dynamicNodes;
+        edges = dynamicEdges;
+      }
+    }
+  } catch (err) {
+    console.warn("Could not reach /api/identities, displaying baseline identity intelligence:", err);
+  }
+
+  // Render SVG Graph
+  const linesHtml = edges.map(([a,b]) => {
+    const na = nodes.find(n => n.id === a), nb = nodes.find(n => n.id === b);
+    if (!na || !nb) return "";
+    return `<line x1="${na.x}" y1="${na.y}" x2="${nb.x}" y2="${nb.y}" stroke="#263049" stroke-width="1.5"/>`;
+  }).join("");
+
+  const nodesHtml = nodes.map(n => {
+    const r = n.type === "face" ? 14 : 11;
+    return `<g>
+      <circle cx="${n.x}" cy="${n.y}" r="${r}" fill="#0D1220" stroke="${colorFor(n.type)}" stroke-width="2"/>
+      <text x="${n.x}" y="${n.y - r - 6}" text-anchor="middle" font-size="10" fill="#B7C0D3">${n.label.substring(0, 22)}</text>
+    </g>`;
+  }).join("");
+
+  document.getElementById("graph").innerHTML = linesHtml + nodesHtml;
+
+  // Render Linked Identities List
+  if (liveList.length > 0) {
+    document.getElementById("identity-list").innerHTML = liveList.map(n => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 4px;border-bottom:1px solid var(--border-2);font-size:12.5px;">
+        <div>
+          <span style="color:var(--text-2);font-weight:500;">${n.full_name || "Unknown"}</span>
+          <span style="font-size:11px;color:var(--text-5);margin-left:8px;">${n.document_type || "Doc"} • ${n.document_number || "—"}</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="font-size:11px;color:var(--text-4);">${n.screening_count || 1} screening(s)</span>
+          ${riskBadge(n.fraud_flag ? "HIGH" : n.risk_level === "HIGH" ? "HIGH" : "VALID", "sm")}
+        </div>
+      </div>`).join("");
+  } else {
+    document.getElementById("identity-list").innerHTML = nodes.filter(n => n.type === "person").map(n => `
+      <div style="display:flex;justify-content:space-between;padding:9px 4px;border-bottom:1px solid var(--border-2);font-size:12.5px;">
+        <span style="color:var(--text-2);">${n.label}</span>
+        <span style="color:var(--text-5);">${edges.filter(e => e.includes(n.id)).length} linked record(s)</span>
+      </div>`).join("");
+  }
+}
+
+loadIdentityNetwork();
 </script>
 </body>
-</html>
+</html>

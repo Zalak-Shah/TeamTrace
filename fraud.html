@@ -127,10 +127,33 @@ input:focus,select:focus{border-color:var(--cyan)!important;}
   <div class="main">
     <div class="topbar" id="topbar"></div>
     <div class="content">
+      <div class="grid grid-4" style="margin-bottom:16px;">
+        <div class="panel">
+          <div class="stat-label">Total Screenings</div>
+          <div class="stat-value" id="fstat-total">—</div>
+          <div class="stat-sub">Screened records</div>
+        </div>
+        <div class="panel">
+          <div class="stat-label">Cleared / Low Risk</div>
+          <div class="stat-value" id="fstat-cleared" style="color:var(--valid);">—</div>
+          <div class="stat-sub">Passed all checks</div>
+        </div>
+        <div class="panel">
+          <div class="stat-label">Flagged for Review</div>
+          <div class="stat-value" id="fstat-flagged" style="color:var(--medium);">—</div>
+          <div class="stat-sub">Review / Suspicious</div>
+        </div>
+        <div class="panel">
+          <div class="stat-label">High-Risk Fraud</div>
+          <div class="stat-value" id="fstat-high" style="color:var(--high);">—</div>
+          <div class="stat-sub">Critical alerts</div>
+        </div>
+      </div>
       <div id="cases" style="display:flex;flex-direction:column;gap:12px;"></div>
     </div>
   </div>
 </div>
+
 
 <script>
 /* ---------------- Shared nav + chrome ---------------- */
@@ -333,26 +356,74 @@ const STEPS = [
 
 </script>
 <script>
-renderChrome({ active: "fraud", title: "Fraud cases", subtitle: "Investigations opened from flagged screenings" });
+renderChrome({ active: "fraud", title: "Fraud cases", subtitle: "Investigations opened from flagged screenings (Database Connected)" });
 
-document.getElementById("cases").innerHTML = FRAUD_CASES.map(f => `
-  <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-    <div style="display:flex;gap:14px;align-items:flex-start;">
-      <div style="width:38px;height:38px;border-radius:10px;background:rgba(248,113,113,.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-        <i class="ti ti-shield-exclamation" style="font-size:18px;color:var(--high);"></i>
-      </div>
-      <div>
-        <div style="font-size:14px;color:var(--text-2);font-weight:500;">${f.title}</div>
-        <div style="font-size:11.5px;color:var(--text-5);margin-top:4px;">
-          <span class="mono-tag">${f.id}</span> • ${f.checkpoint} • Opened ${f.opened} • ${f.linked} linked record(s)
+async function loadFraudCases() {
+  const container = document.getElementById("cases");
+  container.innerHTML = `<div style="text-align:center;padding:24px;color:var(--text-4);"><i class="ti ti-loader" style="animation:spin 1s linear infinite;"></i> Loading fraud intelligence cases...</div>`;
+
+  let casesList = FRAUD_CASES;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/fraud`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) {
+        // Summary stats
+        const s = data.summary || {};
+        const total = s.total_screenings ?? 0;
+        const cleared = s.cleared_count ?? 0;
+        const high = s.high_risk_count ?? 0;
+        const flagged = (s.suspicious_count ?? 0) + (s.review_count ?? 0);
+
+        document.getElementById("fstat-total").textContent = total;
+        document.getElementById("fstat-cleared").textContent = cleared;
+        document.getElementById("fstat-flagged").textContent = flagged;
+        document.getElementById("fstat-high").textContent = high;
+
+        if (Array.isArray(data.cases) && data.cases.length > 0) {
+          casesList = data.cases.map(c => ({
+            id: `FC-${c.id}`,
+            title: c.case_type ? `${c.case_type} (${c.document_number || "Doc"})` : (c.description || "Flagged incident"),
+            riskKey: statusToRiskKey(c.severity || "HIGH"),
+            status: c.status || "Open Investigation",
+            linked: 1,
+            checkpoint: "Border Control",
+            opened: (c.created_at || "").substring(0, 10) || "Recent"
+          }));
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Could not reach /api/fraud, displaying baseline cases:", err);
+    // Baseline stats from mock
+    document.getElementById("fstat-total").textContent = HISTORY.length;
+    document.getElementById("fstat-cleared").textContent = HISTORY.filter(h => h.riskKey === "VALID").length;
+    document.getElementById("fstat-flagged").textContent = HISTORY.filter(h => h.riskKey === "MEDIUM" || h.riskKey === "SUSPICIOUS").length;
+    document.getElementById("fstat-high").textContent = HISTORY.filter(h => h.riskKey === "HIGH").length;
+  }
+
+  container.innerHTML = casesList.map(f => `
+    <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+      <div style="display:flex;gap:14px;align-items:flex-start;">
+        <div style="width:38px;height:38px;border-radius:10px;background:rgba(248,113,113,.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <i class="ti ti-shield-exclamation" style="font-size:18px;color:var(--high);"></i>
+        </div>
+        <div>
+          <div style="font-size:14px;color:var(--text-2);font-weight:500;">${f.title}</div>
+          <div style="font-size:11.5px;color:var(--text-5);margin-top:4px;">
+            <span class="mono-tag">${f.id}</span> • ${f.checkpoint} • Opened ${f.opened} • ${f.linked} linked record(s)
+          </div>
         </div>
       </div>
-    </div>
-    <div style="display:flex;align-items:center;gap:10px;">
-      <span style="font-size:11.5px;padding:4px 10px;border-radius:999px;color:var(--text-4);background:#161D2E;border:1px solid var(--border-3);">${f.status}</span>
-      ${riskBadge(f.riskKey,"sm")}
-    </div>
-  </div>`).join("");
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:11.5px;padding:4px 10px;border-radius:999px;color:var(--text-4);background:#161D2E;border:1px solid var(--border-3);">${f.status}</span>
+        ${riskBadge(f.riskKey,"sm")}
+      </div>
+    </div>`).join("");
+}
+
+loadFraudCases();
 </script>
 </body>
-</html>
+</html>

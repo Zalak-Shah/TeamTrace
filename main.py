@@ -35,8 +35,20 @@ from database import (
     add_audit_log,
     get_audit_chain,
     verify_audit_chain,
+    get_screenings_list,
+    get_fraud_cases_list,
+    get_identity_network_data,
     get_connection,
 )
+
+
+from modules.detector import detect_document_type
+from modules.aadhaar import AadhaarVerifier
+from modules.passport import PassportVerifier
+from modules.pan import PanVerifier
+from modules.driving_licence import DrivingLicenceVerifier
+from modules.visa import VisaVerifier
+from modules.forensics import run_ai_and_tamper_forensics
 
 
 # ============================================================
@@ -164,13 +176,20 @@ PASSPORT_NUMBER_RE = re.compile(
     re.IGNORECASE,
 )
 
-# ---- Indian Driving Licence: State(2) + RTO(2) + Year(4) + Seq(7) ----
-# e.g. MH01 20160123456  or  DL-0420110012345
-# Two-letter state code from known Indian state codes
+# ---- Indian Driving Licence Regex Patterns ----
+# Modern Sarathi (15-16 chars): State(2) + RTO(2) + Year(4) + Seq(7) e.g. DL-0420110149646, MH01 20160123456
 DL_NUMBER_RE = re.compile(
     r"\b(?:AN|AP|AR|AS|BR|CG|CH|DD|DL|DN|GA|GJ|HP|HR|JH|JK|KA|KL"
     r"|LA|LD|MH|ML|MN|MP|MZ|NL|OD|PB|PY|RJ|SK|TN|TR|TS|UK|UP|WB)"
-    r"[-\s]?\d{2}[-\s]?\d{4}[-\s]?\d{7}\b",
+    r"[-\s/]?\d{2}[-\s/]?\d{4}[-\s/]?\d{6,8}\b",
+    re.IGNORECASE,
+)
+
+# Legacy State DL format: e.g. DL-04-1999-12345, MH01/2012/1234, KA05-20040001234, DL-1420110012345
+DL_NUMBER_LEGACY_RE = re.compile(
+    r"\b(?:AN|AP|AR|AS|BR|CG|CH|DD|DL|DN|GA|GJ|HP|HR|JH|JK|KA|KL"
+    r"|LA|LD|MH|ML|MN|MP|MZ|NL|OD|PB|PY|RJ|SK|TN|TR|TS|UK|UP|WB)"
+    r"[-\s/]?\d{1,3}[-\s/A-Z0-9]{5,18}\b",
     re.IGNORECASE,
 )
 
@@ -654,6 +673,10 @@ def extract_document_number(
         m = DL_NUMBER_RE.search(text)
         if m:
             return re.sub(r"[\s-]", "", m.group(0)).upper()
+        # Fallback to legacy format
+        m_leg = DL_NUMBER_LEGACY_RE.search(text)
+        if m_leg:
+            return re.sub(r"[\s-]", "", m_leg.group(0)).upper()
 
     elif doc_type == "Voter ID":
         m = VOTER_ID_RE.search(text)
@@ -1646,6 +1669,12 @@ def extract_document_information(
                 information["licence_number"] = (
                     re.sub(r"[\s-]", "", m.group(0)).upper()
                 )
+            else:
+                m_leg = DL_NUMBER_LEGACY_RE.search(text)
+                if m_leg:
+                    information["licence_number"] = (
+                        re.sub(r"[\s-]", "", m_leg.group(0)).upper()
+                    )
         information["document_number"] = (
             information["licence_number"]
         )
@@ -1659,31 +1688,51 @@ def extract_document_information(
             or guess_name(text)
         )
 
-        information["date_of_birth"] = (
-            find_labeled_value([
-                "date of birth", "dob", "birth date",
-                "d.o.b",
+        # DOB: Try labeled first, then fallback to first date or explicit DOB regex
+        dob_match = re.search(r"(?:DOB|D\.O\.B|Birth|Date of Birth)\s*[:\-]?\s*([0-9]{2}[/\-.][0-9]{2}[/\-.][0-9]{4})", text, re.IGNORECASE)
+        if dob_match:
+            information["date_of_birth"] = dob_match.group(1)
+        else:
+            information["date_of_birth"] = find_labeled_value([
+                "date of birth", "dob", "birth date", "d.o.b",
             ])
-        )
 
-        information["date_of_issue"] = (
-            find_labeled_value([
-                "date of issue", "issue date",
-                "issued on", "doi",
-                "initial issue date",
+        # Date of Issue (DOI)
+        doi_match = re.search(r"(?:DOI|Issue Date|Issued on|Date of Issue)\s*[:\-]?\s*([0-9]{2}[/\-.][0-9]{2}[/\-.][0-9]{4})", text, re.IGNORECASE)
+        if doi_match:
+            information["date_of_issue"] = doi_match.group(1)
+        else:
+            information["date_of_issue"] = find_labeled_value([
+                "date of issue", "issue date", "issued on", "doi", "initial issue date",
             ])
-        )
 
-        # Indian DL has two validity dates: NT (non-transport) and T (transport)
-        information["date_of_expiry"] = (
-            find_labeled_value([
-                "valid till (nt)", "non-transport valid till",
-                "validity (nt)", "nt",
-                "valid till", "valid until",
-                "validity", "date of expiry",
-                "expiry date", "doe",
+        # Expiry date (Validity NT or Validity)
+        exp_match = re.search(r"(?:Valid Till|Validity|Valid Until|Expiry Date|Expiry|DOE)\s*(?:\(NT\))?\s*[:\-]?\s*([0-9]{2}[/\-.][0-9]{2}[/\-.][0-9]{4})", text, re.IGNORECASE)
+        if exp_match:
+            information["date_of_expiry"] = exp_match.group(1)
+        else:
+            information["date_of_expiry"] = find_labeled_value([
+                "valid till (nt)", "non-transport valid till", "validity (nt)", "nt",
+                "valid till", "valid until", "validity", "date of expiry", "expiry date", "doe",
             ])
-        )
+
+        # If individual dates not matched by label, distribute found dates logically
+        all_dates = DATE_RE.findall(text)
+        if len(all_dates) >= 1 and not information["date_of_birth"]:
+            # Usually the oldest date is DOB
+            parsed = []
+            for d_str in all_dates:
+                td = to_date(d_str)
+                if td:
+                    parsed.append((td, d_str))
+            if parsed:
+                parsed.sort(key=lambda x: x[0])
+                # Oldest date is DOB if year < 2010
+                if parsed[0][0].year < 2010:
+                    information["date_of_birth"] = parsed[0][1]
+                # Newest date is expiry if year > current
+                if parsed[-1][0].year >= date.today().year:
+                    information["date_of_expiry"] = parsed[-1][1]
 
         information["sex"] = (
             find_labeled_value(["sex", "gender"])
@@ -2446,7 +2495,7 @@ def run_validation(
                 state_name = INDIAN_STATE_CODES[state_code]
                 verified.append(f"Parivahan State Jurisdiction: Valid ({state_name} - State Code '{state_code}')")
 
-                # Format check: SS-RR-YYYY-NNNNNNN
+                # Format check: SS-RR-YYYY-NNNNNNN or legacy SS-RR-NNNNNN
                 if len(clean_dl) >= 15:
                     rto_code = clean_dl[2:4]
                     year_str = clean_dl[4:8]
@@ -2462,6 +2511,9 @@ def run_validation(
                                 "description": f"Driving licence indicates issuance year {issue_year}, which is out of range.",
                             })
                             score += WEIGHTS["FORGED_PATTERN"]
+                elif len(clean_dl) >= 9:
+                    verified.append(f"Legacy State Driving Licence format accepted ({len(clean_dl)} characters)")
+
                 verified.append(f"Driving Licence Number: Valid format ({doc_number})")
             else:
                 issues.append({
@@ -3103,10 +3155,17 @@ async def screen_document(
         text
     )
 
-    # ========================================================
-    # NORMALIZATION
-    # Aadhaar counts as India's National ID equivalent
-    # ========================================================
+    # If the officer explicitly specified the document type (e.g. 'Driving Licence'),
+    # and the OCR text contains corroborating clues (DL number format or keywords),
+    # honor the officer's selection rather than falling back to 'Unknown'.
+    if expected in ("driving licence", "driving license"):
+        if doc_type == "Unknown" or doc_type != "Driving Licence":
+            if (
+                DL_NUMBER_RE.search(text)
+                or DL_NUMBER_LEGACY_RE.search(text)
+                or any(k in text.lower() for k in ["driving", "licence", "license", "sarathi", "transport", "motor", "rto", "dl no"])
+            ):
+                doc_type = "Driving Licence"
 
     aliases = {
         "driving license": "driving licence",
@@ -3245,15 +3304,28 @@ async def screen_document(
     # CREATE IDENTITY
     # ========================================================
 
+    # ========================================================
+    # IDENTITY & AADHAAR PRIVACY MASKING
+    # ========================================================
+
+    stored_doc_number = doc_number
+    if doc_type == "Aadhaar" and doc_number:
+        # UIDAI compliance: mask first 8 digits -> XXXX-XXXX-1234
+        digits = re.sub(r"\D", "", doc_number)
+        if len(digits) >= 4:
+            stored_doc_number = f"XXXX-XXXX-{digits[-4:]}"
+        else:
+            stored_doc_number = "XXXX-XXXX-XXXX"
+
     identity_id = None
 
     try:
 
-        if doc_number:
+        if stored_doc_number:
 
             identity_id = create_or_get_identity(
                 full_name=name or "Unknown",
-                document_number=doc_number,
+                document_number=stored_doc_number,
             )
 
     except Exception as error:
@@ -3275,9 +3347,10 @@ async def screen_document(
             identity_id=identity_id,
             full_name=name or "Unknown",
             document_number=(
-                doc_number
+                stored_doc_number
                 or "Not detected"
             ),
+
             document_type=doc_type,
             risk_score=score,
             status=status,
@@ -3348,8 +3421,60 @@ async def screen_document(
                 error,
             )
     # ========================================================
-    # DOCUMENT-SPECIFIC EXTRACTED INFORMATION
+    # MODULAR MULTI-DOCUMENT VERIFICATION ENGINE (PHASES 2-6)
     # ========================================================
+
+    ai_tamper_analysis = run_ai_and_tamper_forensics(file_bytes, file.filename or "document.jpg")
+
+    detected_slug, det_conf, det_details = detect_document_type(text, expected_document_type)
+
+    extracted_dict = {
+        "name_guess": name,
+        "document_number": doc_number,
+        "dates_found": extract_dates(text),
+    }
+
+    # Dispatch to dedicated document module
+    verifier_map = {
+        "aadhaar": AadhaarVerifier(),
+        "passport": PassportVerifier(),
+        "pan": PanVerifier(),
+        "driving_licence": DrivingLicenceVerifier(),
+        "visa": VisaVerifier(),
+    }
+
+    verifier = verifier_map.get(detected_slug)
+    if not verifier:
+        # Fallback to declared document type
+        norm_declared = expected_document_type.lower().replace(" ", "_")
+        verifier = verifier_map.get(norm_declared, VisaVerifier())
+
+    module_verification = verifier.verify(
+        file_bytes=file_bytes,
+        filename=file.filename or "document.jpg",
+        content_type=file.content_type or "image/jpeg",
+        ocr_text=text,
+        extracted_fields=extracted_dict,
+    )
+
+    # Cryptographic check failure override rule:
+    # A failed cryptographic check MUST override every other score.
+    if module_verification.verification_tier == 1 and module_verification.status == "failed":
+        score = 100
+        status = "HIGH RISK"
+    else:
+        # Incorporate modular verification risk into overall composite
+        score = max(score, module_verification.risk_score)
+        if ai_tamper_analysis.get("is_ai_generated_risk"):
+            score = max(score, ai_tamper_analysis.get("combined_risk_score", 65))
+        status = status_for_score(score)
+
+    # Combine issues and reasons
+    for reason in module_verification.reasons:
+        if "CRITICAL" in reason or "Failed" in reason or "failed" in reason or "mismatch" in reason.lower():
+            issues.append({"title": "Verification Finding", "severity": "HIGH", "description": reason})
+        else:
+            verified.append(reason)
 
     document_information = extract_document_information(
         text,
@@ -3357,7 +3482,7 @@ async def screen_document(
     )
 
     # ========================================================
-    # FINAL RESPONSE
+    # FINAL RESPONSE (Common Schema + Comprehensive Analysis)
     # ========================================================
 
     return {
@@ -3365,38 +3490,29 @@ async def screen_document(
         "screening_id": screening_id,
         "identity_id": identity_id,
         "document_type": doc_type,
-        "expected_document_type": (
-            expected_document_type
-        ),
+        "detected_document_type": detected_slug,
+        "expected_document_type": expected_document_type,
         "risk_score": score,
         "status": status,
-        "message": (
-            "Document received and "
-            "analyzed successfully."
-        ),
+        "message": "Document analyzed via modular verification engine.",
         "issues": issues,
         "verified_checks": verified,
-        "extracted_fields": {
-    "name_guess": name,
-    "document_number": doc_number,
-    "dates_found": extract_dates(text),
-},
-
-"document_information": document_information,
-
-"ocr_text": text,
-
-"ocr_confidence": ocr_confidence,
-
-"passport_mrz": (
-    parse_mrz(text)
-    if doc_type == "Passport"
-    else None
-),
-
-"visual_analysis": visual_analysis,
+        "extracted_fields": extracted_dict,
+        "document_information": document_information,
+        "ocr_text": text,
+        "ocr_confidence": ocr_confidence,
+        "passport_mrz": (
+            parse_mrz(text)
+            if doc_type == "Passport"
+            else None
+        ),
+        "visual_analysis": visual_analysis,
         "identity_intelligence": identity_intelligence,
+        # Standard Common Result Schema & AI Forensics
+        "verification_result": module_verification.to_dict(),
+        "ai_tamper_analysis": ai_tamper_analysis,
     }
+
 
 
 # ============================================================
@@ -3643,9 +3759,121 @@ def identity_intelligence(
         )
 
 
+@app.get("/api/identities")
+def list_identities_api(
+    limit: int = 30,
+):
+    try:
+        identities = get_identity_network_data(limit=limit)
+        return {
+            "success": True,
+            "count": len(identities),
+            "identities": identities,
+        }
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        )
+
+
+
+# ============================================================
+# SCREENINGS LIST API (Real database screenings)
+# ============================================================
+
+@app.get("/api/screenings")
+def list_screenings_api(
+    limit: int = 100,
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+):
+    try:
+        screenings = get_screenings_list(
+            limit=limit,
+            status=status,
+            search=search,
+        )
+        return {
+            "success": True,
+            "count": len(screenings),
+            "screenings": screenings,
+        }
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        )
+
+
+# ============================================================
+# FRAUD CASES API (Real database fraud cases + live aggregates)
+# ============================================================
+
+@app.get("/api/fraud")
+def list_fraud_api(
+    limit: int = 100,
+):
+    try:
+        cases = get_fraud_cases_list(limit=limit)
+
+        # Retrieve live counts from screenings table
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'HIGH RISK') AS high_risk_count,
+                COUNT(*) FILTER (WHERE status = 'SUSPICIOUS') AS suspicious_count,
+                COUNT(*) FILTER (WHERE status = 'REVIEW REQUIRED') AS review_count,
+                COUNT(*) FILTER (WHERE status = 'LOW RISK') AS cleared_count,
+                COUNT(*) AS total_screenings
+            FROM screenings
+        """)
+        stats = dict(cursor.fetchone())
+
+        # If explicit fraud_cases table has no rows yet, derive active fraud investigations
+        # directly from the real screenings marked HIGH RISK or SUSPICIOUS / REVIEW REQUIRED
+        if not cases:
+            cursor.execute("""
+                SELECT
+                    id,
+                    identity_id,
+                    full_name,
+                    document_number,
+                    document_type,
+                    risk_score,
+                    status AS severity,
+                    checkpoint,
+                    officer_name,
+                    issues AS description,
+                    'Under Investigation' AS status,
+                    'Document Screening Discrepancy' AS case_type,
+                    created_at
+                FROM screenings
+                WHERE status IN ('HIGH RISK', 'SUSPICIOUS', 'REVIEW REQUIRED')
+                ORDER BY id DESC
+                LIMIT %s
+            """, (limit,))
+            cases = [dict(row) for row in cursor.fetchall()]
+
+        cursor.close()
+        conn.close()
+
+        return {
+            "success": True,
+            "cases": cases,
+            "summary": stats,
+        }
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        )
+
+
 # ============================================================
 # STATIC FILES — must be mounted LAST (catch-all fallback)
 # Serves index.html, screening.html, common.js, style.css …
 # ============================================================
 
-app.mount("/", StaticFiles(directory=".", html=True), name="static")
+app.mount("/", StaticFiles(directory=".", html=True), name="static")

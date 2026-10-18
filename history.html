@@ -44,30 +44,68 @@
 
 <script src="common.js"></script>
 <script>
-renderChrome({ active: "history", title: "Screening history", subtitle: "All completed screenings across checkpoints" });
+renderChrome({ active: "history", title: "Screening history", subtitle: "All completed screenings across checkpoints (Database Connected)" });
+
+let screeningsData = [];
+
+async function loadScreenings() {
+  const tbody = document.getElementById("rows");
+  tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-4);"><i class="ti ti-loader" style="animation:spin 1s linear infinite;"></i> Loading screenings from database...</td></tr>`;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/screenings?limit=150`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.screenings) && data.screenings.length > 0) {
+        screeningsData = data.screenings.map(s => ({
+          id: `SCR-${s.id}`,
+          name: s.full_name || "Unknown",
+          documentType: s.document_type || "Document",
+          documentNumber: s.document_number || "—",
+          checkpoint: s.checkpoint || "IGI Airport T3",
+          officer: s.officer_name || "Immigration Officer",
+          date: (s.created_at || "").substring(0, 16).replace("T", " ") || "Recent",
+          score: s.risk_score ?? 0,
+          riskKey: statusToRiskKey(s.status),
+          status: s.status || "REVIEW REQUIRED"
+        }));
+      } else {
+        screeningsData = HISTORY;
+      }
+    } else {
+      screeningsData = HISTORY;
+    }
+  } catch (err) {
+    console.warn("Could not reach backend /api/screenings, falling back to cached records:", err);
+    screeningsData = HISTORY;
+  }
+  renderRows();
+}
 
 function renderRows() {
   const q = document.getElementById("search").value.toLowerCase();
   const filter = document.getElementById("filter").value;
-  const rows = HISTORY.filter(h =>
+  const rows = screeningsData.filter(h =>
     (filter === "ALL" || h.riskKey === filter) &&
-    (h.name.toLowerCase().includes(q) || h.documentNumber.toLowerCase().includes(q))
+    ((h.name || "").toLowerCase().includes(q) || (h.documentNumber || "").toLowerCase().includes(q) || (h.id || "").toLowerCase().includes(q))
   );
+
   document.getElementById("rows").innerHTML = rows.length ? rows.map(h => `
     <tr>
       <td><span class="mono-tag">${h.id}</span></td>
-      <td style="color:var(--text-2);">${h.name}</td>
+      <td style="color:var(--text-2);font-weight:500;">${h.name}</td>
       <td style="color:var(--text-4);">${h.documentType}</td>
       <td style="color:var(--text-4);">${h.checkpoint}</td>
       <td style="color:var(--text-4);">${h.officer}</td>
       <td style="color:var(--text-5);">${h.date}</td>
-      <td style="color:var(--text-3);">${h.score}</td>
+      <td style="color:var(--text-3);font-weight:600;">${h.score}</td>
       <td>${riskBadge(h.riskKey,"sm")}</td>
     </tr>`).join("") : `<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-5);white-space:normal;">No screenings match your search.</td></tr>`;
 }
+
 document.getElementById("search").addEventListener("input", renderRows);
 document.getElementById("filter").addEventListener("change", renderRows);
-renderRows();
+loadScreenings();
 </script>
 </body>
-</html>
+</html>

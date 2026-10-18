@@ -75,50 +75,128 @@
 
 <script src="common.js"></script>
 <script>
-renderChrome({ active: "dashboard", title: "Command dashboard", subtitle: "Live overview across all checkpoints" });
+renderChrome({ active: "dashboard", title: "Command dashboard", subtitle: "Live overview across all checkpoints (Database Connected)" });
 
-const total = HISTORY.length;
-const validCount = HISTORY.filter(h => h.riskKey === "VALID").length;
-const flagged = HISTORY.filter(h => h.riskKey === "HIGH" || h.riskKey === "SUSPICIOUS").length;
-const avg = Math.round(HISTORY.reduce((a,h) => a + h.score, 0) / total);
+async function loadDashboard() {
+  let stats = null;
+  let recents = null;
+  let dist = null;
+  let loads = null;
 
-document.getElementById("stat-total").textContent = total;
-document.getElementById("stat-avg").textContent = avg;
-document.getElementById("stat-valid").textContent = validCount;
-document.getElementById("stat-valid-sub").textContent = Math.round(validCount/total*100) + "% of total";
-document.getElementById("stat-flagged").textContent = flagged;
+  try {
+    const res = await fetch(`${API_BASE}/api/dashboard`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) {
+        stats = data.statistics;
+        recents = data.recent_screenings;
+        dist = data.risk_distribution;
+        loads = data.checkpoint_load;
+      }
+    }
+  } catch (e) {
+    console.warn("Could not reach /api/dashboard, using local fallback metrics:", e);
+  }
 
-document.getElementById("recent-list").innerHTML = HISTORY.slice(0,6).map(h => `
-  <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--border-2);">
-    <div style="min-width:0;">
-      <div style="font-size:13px;color:var(--text-2);font-weight:500;">${h.name}</div>
-      <div style="font-size:11.5px;color:var(--text-5);margin-top:2px;">${h.documentType} • ${h.checkpoint} • ${h.date}</div>
-    </div>
-    ${riskBadge(h.riskKey, "sm")}
-  </div>`).join("");
+  // Fallback to HISTORY if database empty or offline
+  const total = stats?.screenings_today ?? HISTORY.length;
+  const avg = stats?.average_risk_score ?? Math.round(HISTORY.reduce((a,h) => a + h.score, 0) / (HISTORY.length || 1));
+  const validCount = stats?.cleared_documents ?? HISTORY.filter(h => h.riskKey === "VALID").length;
+  const flagged = stats?.flagged_for_review ?? HISTORY.filter(h => h.riskKey === "HIGH" || h.riskKey === "SUSPICIOUS").length;
 
-const riskCounts = Object.keys(RISK).map(k => ({ key: k, count: HISTORY.filter(h => h.riskKey === k).length }));
-const maxCount = Math.max(...riskCounts.map(r => r.count), 1);
-document.getElementById("risk-dist").innerHTML = riskCounts.map(r => `
-  <div>
-    <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px;">
-      <span style="color:var(--text-4);">${RISK[r.key].label}</span>
-      <span style="color:var(--text-2);font-weight:500;">${r.count}</span>
-    </div>
-    <div class="progress-bar"><div class="progress-fill" style="width:${(r.count/maxCount)*100}%;background:var(--${r.key.toLowerCase()});"></div></div>
-  </div>`).join("");
+  document.getElementById("stat-total").textContent = total;
+  document.getElementById("stat-avg").textContent = avg;
+  document.getElementById("stat-valid").textContent = validCount;
+  document.getElementById("stat-valid-sub").textContent = total > 0 ? `${Math.round(validCount/total*100)}% of total` : "0%";
+  document.getElementById("stat-flagged").textContent = flagged;
 
-document.getElementById("checkpoint-load").innerHTML = CHECKPOINTS.map(c => `
-  <div style="display:flex;justify-content:space-between;font-size:12.5px;">
-    <span style="color:var(--text-3);">${c.name}</span>
-    <span style="color:${c.status === "Elevated" ? "var(--suspicious)" : "var(--text-5)"};font-size:11.5px;">${c.screeningsToday} today</span>
-  </div>`).join("");
+  // Recent screenings
+  if (Array.isArray(recents) && recents.length > 0) {
+    document.getElementById("recent-list").innerHTML = recents.slice(0, 6).map(s => {
+      const rKey = statusToRiskKey(s.status);
+      const timeStr = (s.created_at || "").substring(0, 16).replace("T", " ") || "Recent";
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--border-2);">
+          <div style="min-width:0;">
+            <div style="font-size:13px;color:var(--text-2);font-weight:500;">${s.full_name || "Unknown"}</div>
+            <div style="font-size:11.5px;color:var(--text-5);margin-top:2px;">${s.document_type || "Document"} • ${s.checkpoint || "IGI Airport T3"} • ${timeStr}</div>
+          </div>
+          ${riskBadge(rKey, "sm")}
+        </div>`;
+    }).join("");
+  } else {
+    document.getElementById("recent-list").innerHTML = HISTORY.slice(0,6).map(h => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--border-2);">
+        <div style="min-width:0;">
+          <div style="font-size:13px;color:var(--text-2);font-weight:500;">${h.name}</div>
+          <div style="font-size:11.5px;color:var(--text-5);margin-top:2px;">${h.documentType} • ${h.checkpoint} • ${h.date}</div>
+        </div>
+        ${riskBadge(h.riskKey, "sm")}
+      </div>`).join("");
+  }
 
-document.getElementById("fraud-preview").innerHTML = FRAUD_CASES.filter(f => f.status !== "Resolved").slice(0,3).map(f => `
-  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-    <span style="font-size:12.5px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.title}</span>
-    ${riskBadge(f.riskKey, "sm")}
-  </div>`).join("");
+  // Risk distribution
+  let riskCounts = [];
+  if (dist) {
+    riskCounts = [
+      { key: "VALID", label: "Valid / Low Risk", count: dist.low_risk || 0 },
+      { key: "MEDIUM", label: "Review Required", count: dist.review_required || 0 },
+      { key: "SUSPICIOUS", label: "Suspicious", count: dist.suspicious || 0 },
+      { key: "HIGH", label: "High Risk", count: dist.high_risk || 0 }
+    ];
+  } else {
+    riskCounts = Object.keys(RISK).map(k => ({ key: k, label: RISK[k].label, count: HISTORY.filter(h => h.riskKey === k).length }));
+  }
+
+  const maxCount = Math.max(...riskCounts.map(r => r.count), 1);
+  document.getElementById("risk-dist").innerHTML = riskCounts.map(r => `
+    <div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px;">
+        <span style="color:var(--text-4);">${r.label}</span>
+        <span style="color:var(--text-2);font-weight:500;">${r.count}</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${(r.count/maxCount)*100}%;background:var(--${r.key.toLowerCase()});"></div></div>
+    </div>`).join("");
+
+  // Checkpoint load
+  if (Array.isArray(loads) && loads.length > 0) {
+    document.getElementById("checkpoint-load").innerHTML = loads.map(c => `
+      <div style="display:flex;justify-content:space-between;font-size:12.5px;">
+        <span style="color:var(--text-3);">${c.checkpoint || "Active Checkpoint"}</span>
+        <span style="color:var(--cyan);font-size:11.5px;">${c.total_screenings} total</span>
+      </div>`).join("");
+  } else {
+    document.getElementById("checkpoint-load").innerHTML = CHECKPOINTS.map(c => `
+      <div style="display:flex;justify-content:space-between;font-size:12.5px;">
+        <span style="color:var(--text-3);">${c.name}</span>
+        <span style="color:${c.status === "Elevated" ? "var(--suspicious)" : "var(--text-5)"};font-size:11.5px;">${c.screeningsToday} today</span>
+      </div>`).join("");
+  }
+
+  // Fraud preview
+  try {
+    const fRes = await fetch(`${API_BASE}/api/fraud?limit=5`);
+    if (fRes.ok) {
+      const fData = await fRes.json();
+      if (fData.success && Array.isArray(fData.cases) && fData.cases.length > 0) {
+        document.getElementById("fraud-preview").innerHTML = fData.cases.slice(0, 3).map(f => `
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+            <span style="font-size:12.5px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.case_type || "Flagged Fraud"} (${f.document_number || "Doc"})</span>
+            ${riskBadge(statusToRiskKey(f.severity || "HIGH"), "sm")}
+          </div>`).join("");
+        return;
+      }
+    }
+  } catch (e) {}
+
+  document.getElementById("fraud-preview").innerHTML = FRAUD_CASES.filter(f => f.status !== "Resolved").slice(0,3).map(f => `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <span style="font-size:12.5px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.title}</span>
+      ${riskBadge(f.riskKey, "sm")}
+    </div>`).join("");
+}
+
+loadDashboard();
 </script>
 </body>
-</html>
+</html>

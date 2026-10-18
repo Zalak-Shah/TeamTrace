@@ -2142,11 +2142,114 @@ function showResults(data){
       </div>`;
 
     /* ============================================= */
-    /* ASSEMBLE FULL RESULTS UI                      */
+    /* VERIFICATION TIER & AI FORENSICS PARSING     */
     /* ============================================= */
+    const verResult = data.verification_result || {};
+    const tier = verResult.verification_tier || 3;
+    const method = verResult.verification_method || "forensics_only";
+    const limitations = verResult.limitations || [];
+    const aiForensics = data.ai_tamper_analysis || {};
 
+    let tierLabel = "Tier 3: Forensics / Heuristics";
+    let tierColor = "var(--medium)";
+    let tierBg = "rgba(251,191,36,.12)";
+    let tierBorder = "rgba(251,191,36,.3)";
+    let tierIcon = "ti-microscope";
+
+    if (tier === 1) {
+      tierLabel = "Tier 1: Cryptographically Signed";
+      tierColor = "var(--valid)";
+      tierBg = "rgba(52,211,153,.14)";
+      tierBorder = "rgba(52,211,153,.35)";
+      tierIcon = "ti-certificate";
+    } else if (tier === 2) {
+      tierLabel = "Tier 2: Issuer Database Lookup";
+      tierColor = "var(--cyan)";
+      tierBg = "rgba(34,211,238,.14)";
+      tierBorder = "rgba(34,211,238,.35)";
+      tierIcon = "ti-database-check";
+    }
+
+    const tierBanner = `
+      <div style="padding:14px 18px;border-radius:10px;background:${tierBg};border:1px solid ${tierBorder};margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:34px;height:34px;border-radius:8px;background:rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;">
+            <i class="ti ${tierIcon}" style="font-size:20px;color:${tierColor};"></i>
+          </div>
+          <div>
+            <div style="font-size:13.5px;font-weight:700;color:${tierColor};">${tierLabel}</div>
+            <div style="font-size:11.5px;color:var(--text-4);margin-top:2px;">Method: <span class="mono-tag">${escapeHTML(method)}</span></div>
+          </div>
+        </div>
+        <div style="font-size:11px;padding:4px 12px;border-radius:99px;background:rgba(0,0,0,.2);color:${tierColor};font-weight:600;">
+          ${tier === 1 ? "TAMPER-PROOF ISSUER SIGNATURE" : tier === 2 ? "GOVERNMENT ISSUER VERIFIED" : "RISK HEURISTICS ONLY (NOT AUTHENTICATION PROOF)"}
+        </div>
+      </div>`;
+
+    /* AI Tamper & Forensics Section */
+    const aiSection = `
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="section-title">
+          <h3><i class="ti ti-brain"></i> AI &amp; Image Forensics Analysis</h3>
+          <span style="font-size:11px;padding:3px 10px;border-radius:99px;
+            background:${aiForensics.is_ai_generated_risk ? "rgba(248,113,113,.15)" : "rgba(52,211,153,.1)"};
+            color:${aiForensics.is_ai_generated_risk ? "var(--high)" : "var(--valid)"};">
+            ${aiForensics.is_ai_generated_risk ? "Synthetic / AI Risk Detected" : "Optical Camera Scan Consistent"}
+          </span>
+        </div>
+        <div class="grid grid-4" style="margin-bottom:14px;">
+          <div style="padding:10px;border-radius:8px;background:var(--panel-2);border:1px solid var(--border);">
+            <div style="font-size:10.5px;color:var(--text-5);">Combined Forensics Risk</div>
+            <div style="font-size:18px;font-weight:700;color:${(aiForensics.combined_risk_score||0)>=50?'var(--high)':'var(--valid)'};margin-top:3px;">
+              ${aiForensics.combined_risk_score ?? 0}<span style="font-size:11px;color:var(--text-5);">/100</span>
+            </div>
+          </div>
+          <div style="padding:10px;border-radius:8px;background:var(--panel-2);border:1px solid var(--border);">
+            <div style="font-size:10.5px;color:var(--text-5);">ELA Compression Anomaly</div>
+            <div style="font-size:14px;font-weight:600;color:${aiForensics.ela_anomaly_detected?'var(--high)':'var(--valid)'};margin-top:4px;">
+              ${aiForensics.ela_anomaly_detected ? "Splice Detected" : "Uniform Blocks"}
+            </div>
+          </div>
+          <div style="padding:10px;border-radius:8px;background:var(--panel-2);border:1px solid var(--border);">
+            <div style="font-size:10.5px;color:var(--text-5);">Metadata / Editing Tags</div>
+            <div style="font-size:14px;font-weight:600;color:${aiForensics.metadata_tampering_flag?'var(--high)':'var(--text-3)'};margin-top:4px;">
+              ${aiForensics.metadata_tampering_flag ? "Tool Footprint Found" : "No Tool Headers"}
+            </div>
+          </div>
+          <div style="padding:10px;border-radius:8px;background:var(--panel-2);border:1px solid var(--border);">
+            <div style="font-size:10.5px;color:var(--text-5);">FFT Periodic Grids</div>
+            <div style="font-size:14px;font-weight:600;color:${aiForensics.frequency_anomaly_detected?'var(--high)':'var(--valid)'};margin-top:4px;">
+              ${aiForensics.frequency_anomaly_detected ? "Diffusion Lattice" : "Natural Noise"}
+            </div>
+          </div>
+        </div>
+        ${ (aiForensics.findings && aiForensics.findings.length > 0) ? `
+          <div style="margin-top:10px;">
+            <div style="font-size:11px;color:var(--text-5);margin-bottom:6px;">FORENSICS FINDINGS:</div>
+            ${aiForensics.findings.map(f => `
+              <div style="font-size:12px;color:var(--text-4);padding:5px 0;display:flex;align-items:flex-start;gap:6px;">
+                <span style="color:var(--cyan);">&#9656;</span> ${escapeHTML(f)}
+              </div>`).join("")}
+          </div>` : "" }
+      </div>`;
+
+    /* Limitations Section */
+    const limitationsSection = limitations.length > 0 ? `
+      <div class="panel" style="margin-bottom:16px;border-left:3px solid var(--medium);">
+        <div class="section-title">
+          <h3><i class="ti ti-info-circle"></i> Verification Method Limitations</h3>
+        </div>
+        <div style="font-size:12px;color:var(--text-4);line-height:1.6;">
+          ${limitations.map(lim => `
+            <div style="margin-bottom:6px;display:flex;gap:8px;">
+              <span style="color:var(--medium);">&#9888;</span>
+              <span>${escapeHTML(lim)}</span>
+            </div>`).join("")}
+        </div>
+      </div>` : "";
+
+    /* Assemble Final UI */
     results.innerHTML = `
-
       <!-- BACK BUTTON -->
       <div style="margin-bottom:16px;">
         <button class="btn btn-ghost" onclick="location.reload()">
@@ -2204,6 +2307,9 @@ function showResults(data){
 
       </div>
 
+      <!-- TIER & METHOD BADGE -->
+      ${tierBanner}
+
       <!-- ② DOCUMENT PREVIEW + INFO -->
       <div class="grid grid-2" style="margin-bottom:16px;">
 
@@ -2249,6 +2355,12 @@ function showResults(data){
 
       </div>
 
+      <!-- AI FORENSICS SECTION -->
+      ${aiSection}
+
+      <!-- LIMITATIONS SECTION -->
+      ${limitationsSection}
+
       <!-- ③ OCR EXTRACTION -->
       ${ocrSection}
 
@@ -2279,8 +2391,8 @@ function showResults(data){
           </button>
         </div>
       </div>
-
     `;
+
 
   }
 

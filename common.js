@@ -56,6 +56,22 @@ function renderChrome({ active, title, subtitle }) {
   }
 }
 
+/* ---------------- Shared API Config ---------------- */
+const _h = window.location.hostname;
+const API_BASE = (_h === "" || _h === "127.0.0.1" || _h === "localhost")
+  ? "http://127.0.0.1:8000"
+  : "";
+
+function statusToRiskKey(status) {
+  if (!status) return "VALID";
+  const s = status.toUpperCase();
+  if (s.includes("HIGH")) return "HIGH";
+  if (s.includes("SUSPICIOUS")) return "SUSPICIOUS";
+  if (s.includes("REVIEW")) return "MEDIUM";
+  if (s.includes("LOW")) return "LOW";
+  return "VALID";
+}
+
 /* ---------------- Shared risk config ---------------- */
 const RISK = {
   VALID: { label: "Valid", cls: "valid" },
@@ -66,9 +82,10 @@ const RISK = {
 };
 
 function riskBadge(key, size) {
-  const r = RISK[key];
+  const r = RISK[key] || RISK.VALID;
   return `<span class="badge ${r.cls} ${size === "sm" ? "sm" : ""}"><span class="badge-dot"></span>${r.label.toUpperCase()}</span>`;
 }
+
 
 /* ---------------- Shared mock data ---------------- */
 const DOC_TYPES = [

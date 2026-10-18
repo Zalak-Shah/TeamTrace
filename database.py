@@ -936,6 +936,7 @@ def verify_audit_chain():
     expected_prev = GENESIS_HASH
 
     broken_blocks = []
+    first_broken_block = None
 
     for row in rows:
 
@@ -954,14 +955,27 @@ def verify_audit_chain():
             row.get("screening_id"),
         )
 
-        if (
-            row.get("prev_hash") != expected_prev
-            or row.get("hash") != recomputed
-        ):
+        is_broken = False
+        reason = None
+        if row.get("prev_hash") != expected_prev:
+            is_broken = True
+            reason = f"prev_hash mismatch (expected {expected_prev[:12]}..., got {str(row.get('prev_hash'))[:12]}...)"
+        elif row.get("hash") != recomputed:
+            is_broken = True
+            reason = f"stored hash mismatch (expected {recomputed[:12]}..., got {str(row.get('hash'))[:12]}...)"
 
-            broken_blocks.append(row["id"])
+        if is_broken:
+            broken_info = {
+                "id": row["id"],
+                "action": row.get("action"),
+                "reason": reason,
+                "created_at": row.get("created_at"),
+            }
+            broken_blocks.append(broken_info)
+            if first_broken_block is None:
+                first_broken_block = broken_info
 
-        expected_prev = row["hash"]
+        expected_prev = row.get("hash") or ""
 
     return {
 
@@ -970,7 +984,93 @@ def verify_audit_chain():
         "total_blocks": len(rows),
 
         "broken_blocks": broken_blocks,
+
+        "first_broken_block": first_broken_block,
     }
+
+
+# ============================================================
+# GET ALL SCREENINGS (with optional search / filter)
+# ============================================================
+
+def get_screenings_list(limit=100, status=None, search=None):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = "SELECT * FROM screenings WHERE 1=1"
+    params = []
+
+    if status and status != "ALL":
+        query += " AND UPPER(status) = UPPER(%s)"
+        params.append(status)
+
+    if search:
+        query += " AND (full_name ILIKE %s OR document_number ILIKE %s)"
+        params.extend([f"%{search}%", f"%{search}%"])
+
+    query += " ORDER BY id DESC LIMIT %s"
+    params.append(limit)
+
+    cursor.execute(query, tuple(params))
+    rows = [dict(row) for row in cursor.fetchall()]
+
+    cursor.close()
+    conn.close()
+
+    return rows
+
+
+# ============================================================
+# GET ALL FRAUD CASES
+# ============================================================
+
+def get_fraud_cases_list(limit=100):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM fraud_cases
+        ORDER BY id DESC
+        LIMIT %s
+    """, (limit,))
+
+    rows = [dict(row) for row in cursor.fetchall()]
+
+    cursor.close()
+    conn.close()
+
+    return rows
+
+
+# ============================================================
+# GET IDENTITY NETWORK GRAPH DATA
+# ============================================================
+
+def get_identity_network_data(limit=25):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT i.id, i.full_name, i.document_number, i.document_type,
+               i.risk_level, i.fraud_flag, i.watchlist_flag,
+               COUNT(s.id) AS screening_count
+        FROM identities i
+        LEFT JOIN screenings s ON s.identity_id = i.id
+        GROUP BY i.id, i.full_name, i.document_number, i.document_type,
+                 i.risk_level, i.fraud_flag, i.watchlist_flag
+        ORDER BY screening_count DESC, i.id DESC
+        LIMIT %s
+    """, (limit,))
+    identities = [dict(row) for row in cursor.fetchall()]
+
+    cursor.close()
+    conn.close()
+
+    return identities
+
 
 
 # ============================================================
@@ -1091,4 +1191,4 @@ def get_dashboard_data():
 
         "recent_screenings": recent_screenings
 
-    }
+    }
