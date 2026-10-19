@@ -689,11 +689,8 @@ def get_identity_intelligence(identity_id):
     if fraud_cases:
 
         alerts.append(
-
             f"{len(fraud_cases)} fraud case(s) linked to this identity"
-
         )
-
 
     # ========================================================
     # RISK LEVEL
@@ -703,26 +700,21 @@ def get_identity_intelligence(identity_id):
 
         intelligence_risk = "HIGH"
 
-
     elif identity["fraud_flag"]:
 
         intelligence_risk = "SUSPICIOUS"
-
 
     elif suspicious_screenings:
 
         intelligence_risk = "SUSPICIOUS"
 
-
     elif len(screenings) > 1:
 
         intelligence_risk = "REVIEW"
 
-
     else:
 
         intelligence_risk = "LOW"
-
 
     return {
 
@@ -739,6 +731,7 @@ def get_identity_intelligence(identity_id):
         "total_screenings": len(screenings)
 
     }
+
 
 
 # ============================================================

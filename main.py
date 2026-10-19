@@ -12,16 +12,26 @@ import time
 from datetime import date, datetime
 from typing import Optional
 
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # cv2 and numpy are heavy — lazy-loaded only when needed to avoid
 # cold-start penalty (58MB download) on Vercel serverless functions.
 try:
     import cv2 as _cv2
     import numpy as _np
     _CV2_AVAILABLE = True
-except ImportError:
+except ImportError as _cv_err:
     _CV2_AVAILABLE = False
-import requests
-from dotenv import load_dotenv
+    _cv2 = None
+    _np = None
+    if os.getenv("REQUIRE_OPENCV") == "1":
+        raise RuntimeError("REQUIRE_OPENCV is set to 1, but cv2 cannot be imported.") from _cv_err
+
+if _CV2_AVAILABLE and os.getenv("REQUIRE_OPENCV") == "1" and _cv2 is None:
+    raise RuntimeError("REQUIRE_OPENCV is set to 1, but cv2 is not available.")
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
@@ -49,6 +59,13 @@ from modules.pan import PanVerifier
 from modules.driving_licence import DrivingLicenceVerifier
 from modules.visa import VisaVerifier
 from modules.forensics import run_ai_and_tamper_forensics
+from modules.opencv_forensics import (
+    run_ela_check,
+    run_copy_move_check,
+    run_qr_check,
+    run_face_match_check,
+    rectify_document,
+)
 
 
 # ============================================================
@@ -127,6 +144,10 @@ WEIGHTS = {
     "SECURITY_FEATURE_MISSING": 15,
     "LOW_OCR_CONFIDENCE": 10,
     "VISUAL_ISSUE": 10,
+    "OPENCV_ELA_ANOMALY": 25,
+    "OPENCV_COPY_MOVE_TAMPERING": 35,
+    "OPENCV_QR_MISMATCH": 35,
+    "OPENCV_FACE_MISMATCH": 40,
 }
 
 
@@ -2904,11 +2925,16 @@ def root():
 
 @app.get("/api/health")
 def health():
+    cv_ver = None
+    if _CV2_AVAILABLE and _cv2 is not None:
+        cv_ver = getattr(_cv2, "__version__", None)
 
     return {
         "success": True,
         "status": "ONLINE",
         "service": "BorderShield AI",
+        "opencv_version": cv_ver,
+        "opencv_available": bool(_CV2_AVAILABLE and _cv2 is not None),
     }
 
 
@@ -2929,6 +2955,7 @@ def ping():
 async def screen_document(
     file: UploadFile = File(...),
     expected_document_type: str = Form(...),
+    selfie: Optional[UploadFile] = File(None),
 ):
 
     # ========================================================
@@ -2950,6 +2977,16 @@ async def screen_document(
     # ========================================================
 
     file_bytes = await file.read()
+
+    selfie_bytes = None
+    if selfie is not None:
+        try:
+            selfie_bytes = await selfie.read()
+            if not selfie_bytes:
+                selfie_bytes = None
+        except Exception as _selfie_err:
+            print("Selfie read error:", _selfie_err)
+            selfie_bytes = None
 
     if not file_bytes:
 
@@ -2995,6 +3032,17 @@ async def screen_document(
         or "document"
     )
 
+    # Attempt document rectification (perspective correction) if available
+    doc_bytes_for_ocr = file_bytes
+    try:
+        rectified_img, rect_res = rectify_document(file_bytes)
+        if rect_res.get("rectified") and _CV2_AVAILABLE and _cv2 is not None and isinstance(rectified_img, _np.ndarray):
+            ok, enc_rect = _cv2.imencode(".jpg", rectified_img)
+            if ok:
+                doc_bytes_for_ocr = enc_rect.tobytes()
+    except Exception as _rect_err:
+        print("Rectification notice:", _rect_err)
+
     # --------------------------------------------------------
     # FIRST ATTEMPT:
     # PREPROCESSED IMAGE
@@ -3002,7 +3050,7 @@ async def screen_document(
 
     processed_bytes = (
         preprocess_image_for_ocr(
-            file_bytes
+            doc_bytes_for_ocr
         )
     )
 
@@ -3048,19 +3096,15 @@ async def screen_document(
 
     if not text:
 
-        score = 80
-
-        status = status_for_score(
-            score
-        )
+        status = "ocr_unavailable"
 
         issues = [
             {
-                "title": "No text detected",
-                "severity": "HIGH",
+                "title": "OCR text extraction unavailable",
+                "severity": "MEDIUM",
                 "description": (
-                    "No readable text could be "
-                    "extracted after OCR attempts."
+                    "No readable text could be extracted or OCR timed out. "
+                    "Risk score cannot be computed from empty text; officer manual inspection is required."
                 ),
             }
         ]
@@ -3074,7 +3118,7 @@ async def screen_document(
                 full_name="Unknown",
                 document_number="Not detected",
                 document_type="Unknown",
-                risk_score=score,
+                risk_score=0,
                 status=status,
                 issues=issues,
                 checkpoint=(
@@ -3098,9 +3142,13 @@ async def screen_document(
         return {
             "success": True,
             "screening_id": screening_id,
+            "identity_id": None,
             "document_type": "Unknown",
-            "risk_score": score,
-            "status": status,
+            "detected_document_type": "unknown",
+            "expected_document_type": expected_document_type,
+            "risk_score": 0,
+            "status": "ocr_unavailable",
+            "message": "OCR unavailable or timed out. No readable text extracted; risk score not computed.",
             "issues": issues,
             "verified_checks": [],
             "extracted_fields": {
@@ -3110,9 +3158,9 @@ async def screen_document(
             },
             "document_information": {
                 "document_type": "Unknown",
-                 "name": None,
-                 "document_number": None,
-                 "nationality": None,
+                "name": None,
+                "document_number": None,
+                "nationality": None,
                 "date_of_birth": None,
                 "sex": None,
                 "date_of_issue": None,
@@ -3130,11 +3178,31 @@ async def screen_document(
                 "permit_type": None,
                 "raw_dates": [],
             },
+            "ocr_text": "",
+            "ocr_confidence": 0.0,
+            "passport_mrz": None,
             "visual_analysis": visual_analysis,
-            "message": (
-                "OCR extraction failed "
-                "after multiple attempts."
-            ),
+            "identity_intelligence": None,
+            "verification_result": {
+                "document_type": "unknown",
+                "status": "ocr_unavailable",
+                "risk_score": 0,
+                "reasons": ["OCR text extraction unavailable"],
+                "limitations": ["Document text unreadable or OCR service timed out"],
+                "verification_tier": 3,
+                "verification_method": "manual_inspection_required",
+            },
+            "ai_tamper_analysis": {
+                "is_ai_generated_risk": False,
+                "combined_risk_score": 0,
+                "findings": ["OCR unavailable — skipped automated risk analysis"],
+            },
+            "opencv_forensics": {
+                "ela": {"score": 0.0, "flag": False, "explanation": "Skipped due to unreadable document", "status": "skipped", "details": {}},
+                "copy_move": {"score": 0.0, "flag": False, "explanation": "Skipped due to unreadable document", "status": "skipped", "details": {}},
+                "qr": {"score": 0.0, "flag": False, "explanation": "Skipped due to unreadable document", "status": "skipped", "details": {}},
+                "face_match": {"score": 0.0, "flag": False, "explanation": "Skipped due to unreadable document", "status": "skipped", "details": {}},
+            },
         }
 
     # ========================================================
@@ -3482,6 +3550,105 @@ async def screen_document(
     )
 
     # ========================================================
+    # OPENCV ADVANCED FORENSICS ENGINE
+    # ========================================================
+    opencv_forensics = {
+        "ela": {"score": 0.0, "flag": False, "explanation": "Not evaluated", "status": "skipped", "details": {}},
+        "copy_move": {"score": 0.0, "flag": False, "explanation": "Not evaluated", "status": "skipped", "details": {}},
+        "qr": {"score": 0.0, "flag": False, "explanation": "Not evaluated", "status": "skipped", "details": {}},
+        "face_match": {"score": 0.0, "flag": False, "explanation": "Not evaluated", "status": "skipped", "details": {}},
+    }
+
+    try:
+        opencv_forensics["ela"] = run_ela_check(file_bytes)
+    except Exception as _ela_err:
+        opencv_forensics["ela"] = {
+            "score": 0.0,
+            "flag": False,
+            "explanation": f"ELA execution error: {str(_ela_err)}",
+            "status": "failed",
+            "details": {"error": str(_ela_err)},
+        }
+
+    try:
+        opencv_forensics["copy_move"] = run_copy_move_check(file_bytes)
+    except Exception as _cm_err:
+        opencv_forensics["copy_move"] = {
+            "score": 0.0,
+            "flag": False,
+            "explanation": f"Copy-move check error: {str(_cm_err)}",
+            "status": "failed",
+            "details": {"error": str(_cm_err)},
+        }
+
+    try:
+        opencv_forensics["qr"] = run_qr_check(file_bytes, doc_type=expected_document_type, ocr_text=text)
+    except Exception as _qr_err:
+        opencv_forensics["qr"] = {
+            "score": 0.0,
+            "flag": False,
+            "explanation": f"QR check error: {str(_qr_err)}",
+            "status": "failed",
+            "details": {"error": str(_qr_err)},
+        }
+
+    if selfie_bytes:
+        try:
+            opencv_forensics["face_match"] = run_face_match_check(file_bytes, selfie_bytes)
+        except Exception as _face_err:
+            opencv_forensics["face_match"] = {
+                "score": 0.0,
+                "flag": False,
+                "explanation": f"Face match error: {str(_face_err)}",
+                "status": "failed",
+                "details": {"error": str(_face_err)},
+            }
+    else:
+        opencv_forensics["face_match"] = {
+            "score": 0.0,
+            "flag": False,
+            "explanation": "No selfie image provided for facial comparison.",
+            "status": "skipped",
+            "details": {"selfie_provided": False},
+        }
+
+    # Integrate OpenCV forensics into risk scoring (capped 0 to 100)
+    if opencv_forensics["ela"].get("flag"):
+        score += WEIGHTS.get("OPENCV_ELA_ANOMALY", 25)
+        issues.append({
+            "title": "OpenCV Forensics: ELA Compression Anomaly",
+            "severity": "HIGH",
+            "description": opencv_forensics["ela"].get("explanation"),
+        })
+
+    if opencv_forensics["copy_move"].get("flag"):
+        score += WEIGHTS.get("OPENCV_COPY_MOVE_TAMPERING", 35)
+        issues.append({
+            "title": "OpenCV Forensics: Copy-Move Forgery Detected",
+            "severity": "HIGH",
+            "description": opencv_forensics["copy_move"].get("explanation"),
+        })
+
+    if opencv_forensics["qr"].get("flag"):
+        score += WEIGHTS.get("OPENCV_QR_MISMATCH", 35)
+        issues.append({
+            "title": "OpenCV Forensics: QR Code Data Conflict",
+            "severity": "HIGH",
+            "description": opencv_forensics["qr"].get("explanation"),
+        })
+
+    if opencv_forensics["face_match"].get("flag") and opencv_forensics["face_match"].get("status") == "completed":
+        score += WEIGHTS.get("OPENCV_FACE_MISMATCH", 40)
+        issues.append({
+            "title": "OpenCV Forensics: Facial Mismatch with Live Selfie",
+            "severity": "HIGH",
+            "description": opencv_forensics["face_match"].get("explanation"),
+        })
+
+    score = min(max(int(score), 0), 100)
+    status = status_for_score(score)
+
+    # ========================================================
     # FINAL RESPONSE (Common Schema + Comprehensive Analysis)
     # ========================================================
 
@@ -3511,6 +3678,7 @@ async def screen_document(
         # Standard Common Result Schema & AI Forensics
         "verification_result": module_verification.to_dict(),
         "ai_tamper_analysis": ai_tamper_analysis,
+        "opencv_forensics": opencv_forensics,
     }
 
 

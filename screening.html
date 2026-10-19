@@ -738,6 +738,34 @@ onchange="handleFile()"
 
 </div>
 
+<!-- OPTIONAL LIVE SELFIE UPLOAD (OpenCV Facial Verification) -->
+<input
+type="file"
+id="selfieInput"
+accept=".jpg,.jpeg,.png"
+style="display:none;"
+onchange="handleSelfieFile()"
+/>
+
+<div
+  class="dropzone"
+  style="margin-top:12px;margin-bottom:0;padding:12px 16px;border-style:dashed;background:rgba(99,102,241,.03);"
+  onclick="document.getElementById('selfieInput').click()">
+
+  <div style="display:flex;align-items:center;justify-content:center;gap:12px;">
+    <i class="ti ti-user-scan" style="font-size:24px;color:var(--indigo);"></i>
+    <div style="text-align:left;">
+      <div id="dropzone-selfie-text" style="font-size:12.5px;color:var(--text-3);font-weight:600;">
+        Add Live Selfie (Optional Facial Match)
+      </div>
+      <div style="font-size:11px;color:var(--text-5);margin-top:2px;">
+        YuNet + SFace OpenCV 1:1 biometric comparison against document photo
+      </div>
+    </div>
+  </div>
+
+</div>
+
 
 <!-- ================= CAMERA MODAL ================= -->
 
@@ -1292,7 +1320,23 @@ function handleFile(){
       ${formatFileSize(selectedFile.size)}
     </span>
   `;
+}
 
+let selectedSelfieFile = null;
+
+function handleSelfieFile(){
+  const input = document.getElementById("selfieInput");
+  if(!input.files || input.files.length === 0){
+    return;
+  }
+  selectedSelfieFile = input.files[0];
+  const selfieText = document.getElementById("dropzone-selfie-text");
+  if(selfieText){
+    selfieText.innerHTML = `
+      <strong style="color:var(--indigo);"><i class="ti ti-check"></i> ${escapeHTML(selectedSelfieFile.name)}</strong>
+      <span style="font-size:11px;color:var(--text-5);margin-left:8px;">(${formatFileSize(selectedSelfieFile.size)})</span>
+    `;
+  }
 }
 
 
@@ -1538,21 +1582,15 @@ async function startScreening(){
 
     const formData = new FormData();
 
-    formData.append(
-      "file",
-      selectedFile
-    );
-    formData.append(
-    "expected_document_type",
-    selectedDocumentType
-);
+    formData.append("file", selectedFile);
+    formData.append("expected_document_type", selectedDocumentType);
+    if(selectedSelfieFile){
+      formData.append("selfie", selectedSelfieFile);
+    }
     
     const response = await fetch(API_URL, {
-
       method: "POST",
-
       body: formData
-
     });
 
 
@@ -1749,6 +1787,12 @@ function showResults(data){
       statusIcon   = "ti-alert-triangle";
       statusBg     = "rgba(251,191,36,.08)";
       statusBorder = "rgba(251,191,36,.3)";
+    }
+    if(status.includes("OCR_UNAVAILABLE") || status.includes("UNAVAILABLE")){
+      statusColor  = "var(--medium)";
+      statusIcon   = "ti-file-off";
+      statusBg     = "rgba(251,191,36,.08)";
+      statusBorder = "rgba(251,191,36,.35)";
     }
     if(status.includes("SUSPICIOUS") || status.includes("MEDIUM")){
       statusColor  = "var(--suspicious)";
@@ -2187,6 +2231,16 @@ function showResults(data){
       </div>`;
 
     /* AI Tamper & Forensics Section */
+    const elaPreviewImg = (aiForensics.details && aiForensics.details.ela && aiForensics.details.ela.ela_preview_base64)
+      ? `<div style="display:flex;align-items:center;gap:12px;margin-top:12px;padding:10px;background:rgba(0,0,0,.2);border-radius:8px;border:1px dashed var(--border);">
+          <img src="data:image/jpeg;base64,${aiForensics.details.ela.ela_preview_base64}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid var(--border);" alt="ELA Map"/>
+          <div>
+            <div style="font-size:11.5px;font-weight:600;color:var(--text-3);"><i class="ti ti-scan"></i> ELA Compression Heatmap Preview</div>
+            <div style="font-size:10.5px;color:var(--text-5);margin-top:2px;">Block variance: ${aiForensics.details.ela.block_variance ?? 'N/A'} | Recompressed at 90% quality to isolate spliced compression differentials.</div>
+          </div>
+        </div>`
+      : "";
+
     const aiSection = `
       <div class="panel" style="margin-bottom:16px;">
         <div class="section-title">
@@ -2223,6 +2277,7 @@ function showResults(data){
             </div>
           </div>
         </div>
+        ${elaPreviewImg}
         ${ (aiForensics.findings && aiForensics.findings.length > 0) ? `
           <div style="margin-top:10px;">
             <div style="font-size:11px;color:var(--text-5);margin-bottom:6px;">FORENSICS FINDINGS:</div>
@@ -2247,6 +2302,62 @@ function showResults(data){
             </div>`).join("")}
         </div>
       </div>` : "";
+
+    /* OpenCV Forensics Section */
+    const cvForensics = data.opencv_forensics || {};
+    const cvEla = cvForensics.ela || {};
+    const cvCopyMove = cvForensics.copy_move || {};
+    const cvQr = cvForensics.qr || {};
+    const cvFace = cvForensics.face_match || {};
+
+    const opencvSection = `
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="section-title">
+          <h3><i class="ti ti-eye-check"></i> OpenCV Computer Vision Forensics</h3>
+          <span style="font-size:11px;padding:3px 10px;border-radius:99px;
+            background:${(cvEla.flag || cvCopyMove.flag || cvQr.flag || cvFace.flag) ? "rgba(248,113,113,.15)" : "rgba(52,211,153,.1)"};
+            color:${(cvEla.flag || cvCopyMove.flag || cvQr.flag || cvFace.flag) ? "var(--high)" : "var(--valid)"};">
+            ${(cvEla.flag || cvCopyMove.flag || cvQr.flag || cvFace.flag) ? "Tampering Detected" : "Vision Checks Passed"}
+          </span>
+        </div>
+        <div class="grid grid-4" style="margin-bottom:14px;">
+          <div style="padding:10px;border-radius:8px;background:var(--panel-2);border:1px solid var(--border);">
+            <div style="font-size:10.5px;color:var(--text-5);">JPEG ELA (Q90)</div>
+            <div style="font-size:13.5px;font-weight:600;color:${cvEla.flag ? 'var(--high)' : 'var(--valid)'};margin-top:4px;">
+              ${cvEla.status === 'completed' ? (cvEla.flag ? 'Anomaly Flagged' : 'Uniform Block Diff') : (cvEla.status || 'Skipped')}
+            </div>
+            <div style="font-size:10px;color:var(--text-5);margin-top:2px;">Score: ${cvEla.score ?? 0}</div>
+          </div>
+          <div style="padding:10px;border-radius:8px;background:var(--panel-2);border:1px solid var(--border);">
+            <div style="font-size:10.5px;color:var(--text-5);">Copy-Move (SIFT/RANSAC)</div>
+            <div style="font-size:13.5px;font-weight:600;color:${cvCopyMove.flag ? 'var(--high)' : 'var(--valid)'};margin-top:4px;">
+              ${cvCopyMove.status === 'completed' ? (cvCopyMove.flag ? 'Duplication Found' : 'No Clones') : (cvCopyMove.status || 'Skipped')}
+            </div>
+            <div style="font-size:10px;color:var(--text-5);margin-top:2px;">Inliers: ${cvCopyMove.details?.ransac_inliers ?? 0}</div>
+          </div>
+          <div style="padding:10px;border-radius:8px;background:var(--panel-2);border:1px solid var(--border);">
+            <div style="font-size:10.5px;color:var(--text-5);">QR Code Cross-Check</div>
+            <div style="font-size:13.5px;font-weight:600;color:${cvQr.flag ? 'var(--high)' : 'var(--valid)'};margin-top:4px;">
+              ${cvQr.status === 'completed' ? (cvQr.details?.qr_found ? (cvQr.flag ? 'OCR Conflict' : 'Verified') : 'No QR Found') : (cvQr.status || 'Skipped')}
+            </div>
+            <div style="font-size:10px;color:var(--text-5);margin-top:2px;">${cvQr.details?.qr_found ? 'Decoded' : 'N/A'}</div>
+          </div>
+          <div style="padding:10px;border-radius:8px;background:var(--panel-2);border:1px solid var(--border);">
+            <div style="font-size:10.5px;color:var(--text-5);">Facial Match (YuNet/SFace)</div>
+            <div style="font-size:13.5px;font-weight:600;color:${cvFace.flag ? 'var(--high)' : 'var(--valid)'};margin-top:4px;">
+              ${cvFace.status === 'completed' ? (cvFace.details?.match ? 'Match Verified' : 'Face Mismatch') : 'No Selfie / Skipped'}
+            </div>
+            <div style="font-size:10px;color:var(--text-5);margin-top:2px;">${cvFace.details?.cosine_similarity ? ('Cosine: ' + cvFace.details.cosine_similarity) : 'Skipped'}</div>
+          </div>
+        </div>
+        <div style="font-size:11.5px;color:var(--text-4);padding:4px 0;">
+          ${[cvEla.explanation, cvCopyMove.explanation, cvQr.explanation, cvFace.explanation].filter(Boolean).map(exp => `
+            <div style="margin-top:4px;display:flex;align-items:flex-start;gap:6px;">
+              <span style="color:var(--cyan);">&#9656;</span> ${escapeHTML(exp)}
+            </div>
+          `).join("")}
+        </div>
+      </div>`;
 
     /* Assemble Final UI */
     results.innerHTML = `
@@ -2307,8 +2418,22 @@ function showResults(data){
 
       </div>
 
-      <!-- TIER & METHOD BADGE -->
+      <!-- ①b VERIFICATION TIER BADGE (Phase 2 Standard) -->
       ${tierBanner}
+
+      <!-- ①c IDENTITY INTELLIGENCE & TRAVEL VELOCITY ALERTS -->
+      ${ (data.identity_intelligence && data.identity_intelligence.velocity_alerts && data.identity_intelligence.velocity_alerts.length > 0) ? `
+        <div style="padding:14px 18px;border-radius:10px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);margin-bottom:16px;">
+          <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--high);margin-bottom:6px;">
+            <i class="ti ti-plane-inflight"></i> Cross-Checkpoint Travel Velocity Anomaly Detected
+          </div>
+          ${data.identity_intelligence.velocity_alerts.map(va => `
+            <div style="font-size:12px;color:var(--text-3);margin-top:4px;">
+              &#9888; ${escapeHTML(va)}
+            </div>
+          `).join("")}
+        </div>` : "" }
+
 
       <!-- ② DOCUMENT PREVIEW + INFO -->
       <div class="grid grid-2" style="margin-bottom:16px;">
@@ -2357,6 +2482,9 @@ function showResults(data){
 
       <!-- AI FORENSICS SECTION -->
       ${aiSection}
+
+      <!-- OPENCV COMPUTER VISION FORENSICS SECTION -->
+      ${opencvSection}
 
       <!-- LIMITATIONS SECTION -->
       ${limitationsSection}

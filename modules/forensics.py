@@ -127,13 +127,33 @@ def compute_ela_score(image_bytes: bytes, quality: int = 90) -> Tuple[bool, floa
         details["std_error"] = round(std_err, 2)
         details["max_error"] = round(max_err, 2)
 
+        # Localized block analysis (16x16 grid) to identify localized spliced tampering
+        h, w = diff_arr.shape[:2]
+        block_h = max(h // 16, 8)
+        block_w = max(w // 16, 8)
+        block_means = []
+        for r in range(0, h - block_h + 1, block_h):
+            for c in range(0, w - block_w + 1, block_w):
+                blk = diff_arr[r:r+block_h, c:c+block_w]
+                block_means.append(float(np.mean(blk)))
+
+        block_variance = float(np.std(block_means)) if block_means else std_err
+        details["block_variance"] = round(block_variance, 2)
+
         # In natural documents, error level is relatively uniform.
         # High standard deviation / spikes indicate spliced elements.
-        anomaly_score = min(max(round((std_err / 18.0) * 100, 1), 0.0), 100.0)
+        anomaly_score = min(max(round((std_err / 18.0) * 80 + (block_variance / 12.0) * 20, 1), 0.0), 100.0)
+
+        # Optional low-res base64 heatmap preview for visual auditing in frontend
+        import base64
+        thumb_buffer = io.BytesIO()
+        enhanced.thumbnail((240, 240))
+        enhanced.save(thumb_buffer, format="JPEG", quality=75)
+        details["ela_preview_base64"] = base64.b64encode(thumb_buffer.getvalue()).decode("ascii")
 
         if anomaly_score >= 60.0:
             anomaly_detected = True
-            findings.append(f"High compression variance detected (ELA score {anomaly_score}%). Suggests non-uniform digital splicing or localized text edits.")
+            findings.append(f"High compression variance detected (ELA score {anomaly_score}%, block variance {details['block_variance']}). Suggests non-uniform digital splicing or localized text edits.")
         elif anomaly_score >= 35.0:
             anomaly_detected = False
             findings.append(f"Moderate compression variance (ELA score {anomaly_score}%). May be caused by multi-generation compression or resizing.")
