@@ -3083,46 +3083,22 @@ async def screen_document(
     except Exception as _rect_err:
         print("Rectification notice:", _rect_err)
 
-    # --------------------------------------------------------
-    # FIRST ATTEMPT:
-    # PREPROCESSED IMAGE
-    # --------------------------------------------------------
-
-    processed_bytes = (
-        preprocess_image_for_ocr(
-            doc_bytes_for_ocr
-        )
-    )
-
+    # First attempt: OCR on the original high-fidelity document
     text = perform_ocr(
-        processed_bytes,
+        file_bytes,
         filename,
     )
 
-    # --------------------------------------------------------
-    # SECOND ATTEMPT:
-    # ORIGINAL UPLOADED DOCUMENT
-    # --------------------------------------------------------
-
-    if len(text.strip()) < 20:
-
-        print(
-            "Processed OCR result is too short. "
-            "Trying original document..."
-        )
-
-        original_text = perform_ocr(
-            file_bytes,
+    # Second attempt: If raw OCR returns very little text, try preprocessed/rectified image
+    if len(text.strip()) < 15:
+        print("Raw OCR result short, attempting preprocessed image...")
+        processed_bytes = preprocess_image_for_ocr(doc_bytes_for_ocr)
+        processed_text = perform_ocr(
+            processed_bytes,
             filename,
         )
-
-        if len(
-            original_text.strip()
-        ) > len(
-            text.strip()
-        ):
-
-            text = original_text
+        if len(processed_text.strip()) > len(text.strip()):
+            text = processed_text
 
     # --------------------------------------------------------
     # KEEP BEST OCR RESULT
