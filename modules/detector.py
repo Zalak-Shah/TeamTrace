@@ -27,6 +27,9 @@ DL_NUM_RE = re.compile(
 GENERIC_DL_RE = re.compile(r"\b[A-Z]{2}[-\s/]?\d{2}[-\s/]?\d{4,11}\b", re.IGNORECASE)
 MRZ_TD3_RE = re.compile(r"P[<K][A-Z<]{3}[A-Z0-9<]{39}")
 
+PERMIT_NUM_RE = re.compile(r"\b(?:permit|pmt)[\s#.:-]*([A-Z0-9-]{5,20})\b", re.IGNORECASE)
+NATIONAL_ID_NUM_RE = re.compile(r"\b(?:id|identity)[\s#.:-]*([A-Z0-9-]{5,20})\b", re.IGNORECASE)
+
 KEYWORDS: Dict[DocumentType, list] = {
     "aadhaar": [
         "unique identification authority",
@@ -35,10 +38,12 @@ KEYWORDS: Dict[DocumentType, list] = {
         "aadhar",
         "uidai",
         "meraaadhaar",
+        "mera aadhaar",
         "enrollment no",
         "enrolment no",
         "my aadhaar",
         "vid",
+        "help@uidai",
     ],
     "pan": [
         "income tax department",
@@ -46,6 +51,8 @@ KEYWORDS: Dict[DocumentType, list] = {
         "govt of india",
         "incometax",
         "pan card",
+        "pan no",
+        "pan number",
         "pan",
     ],
     "passport": [
@@ -54,12 +61,14 @@ KEYWORDS: Dict[DocumentType, list] = {
         "type p",
         "code ind",
         "given names",
+        "given name",
         "surname",
         "nationality",
         "place of birth",
         "place of issue",
         "date of expiry",
         "date of issue",
+        "ministry of external affairs",
     ],
     "driving_licence": [
         "driving licence",
@@ -88,7 +97,6 @@ KEYWORDS: Dict[DocumentType, list] = {
         "mcwg",
         "blood group",
     ],
-
     "visa": [
         "visa",
         "entry permit",
@@ -98,6 +106,26 @@ KEYWORDS: Dict[DocumentType, list] = {
         "stay duration",
         "visa number",
         "immigration",
+        "port of entry",
+    ],
+    "national_id": [
+        "national identity card",
+        "national identity",
+        "national id",
+        "identity card",
+        "citizen id",
+        "civil id",
+        "id card",
+    ],
+    "permit": [
+        "entry permit",
+        "residence permit",
+        "work permit",
+        "travel permit",
+        "permit number",
+        "permit type",
+        "permission",
+        "special permit",
     ],
 }
 
@@ -117,6 +145,8 @@ def detect_document_type(
         "passport": 0,
         "driving_licence": 0,
         "visa": 0,
+        "national_id": 0,
+        "permit": 0,
     }
 
     # 1. Check strong structural markers (MRZ, specific number formats)
@@ -132,6 +162,12 @@ def detect_document_type(
     if AADHAAR_NUM_RE.search(ocr_text or ""):
         scores["aadhaar"] += 30
 
+    if PERMIT_NUM_RE.search(ocr_text or ""):
+        scores["permit"] += 25
+
+    if NATIONAL_ID_NUM_RE.search(ocr_text or ""):
+        scores["national_id"] += 20
+
     # 2. Check keyword frequencies
     for doc_type, kws in KEYWORDS.items():
         for kw in kws:
@@ -141,20 +177,39 @@ def detect_document_type(
     # Strong overrides
     if "income tax department" in text and "permanent account number" in text:
         scores["pan"] += 40
-    if "unique identification authority" in text or "uidai" in text:
-        scores["aadhaar"] += 40
+    if "unique identification authority" in text or "uidai" in text or "help@uidai" in text:
+        scores["aadhaar"] += 45
     if "republic of india" in text and "passport" in text:
         scores["passport"] += 40
     if any(k in text for k in ["driving licence", "driving license", "licence to drive", "license to drive", "transport department", "sarathi"]):
         scores["driving_licence"] += 50
-
+    if any(k in text for k in ["work permit", "residence permit", "travel permit", "entry permit", "permit number"]):
+        scores["permit"] += 35
+    if any(k in text for k in ["national identity card", "national id", "civil id", "citizen id"]):
+        scores["national_id"] += 30
 
     # 3. Find top candidate
     sorted_candidates = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     best_type, top_score = sorted_candidates[0]
 
+    # Map aliases for declared_type
+    declared_aliases = {
+        "pan_card": "pan",
+        "pancard": "pan",
+        "driving_license": "driving_licence",
+        "driving_licence": "driving_licence",
+        "national_id": "national_id",
+        "nationalid": "national_id",
+        "aadhaar": "aadhaar",
+        "aadhar": "aadhaar",
+        "passport": "passport",
+        "visa": "visa",
+        "permit": "permit",
+    }
+    raw_norm = declared_type.lower().strip().replace(" ", "_").replace("-", "_")
+    normalized_declared = declared_aliases.get(raw_norm, raw_norm)
+
     # If declared type was manually chosen by officer and has at least moderate score, give it a boost
-    normalized_declared = declared_type.lower().replace(" ", "_")
     if normalized_declared in scores and scores[normalized_declared] >= 15:
         if top_score < 40 or scores[normalized_declared] >= (top_score - 10):
             best_type = normalized_declared
@@ -162,7 +217,7 @@ def detect_document_type(
 
     if top_score < 15:
         # Unable to determine conclusively
-        if normalized_declared in scores:
+        if normalized_declared in scores and normalized_declared != "auto":
             return normalized_declared, 30.0, {
                 "detected": normalized_declared,
                 "confidence": 30.0,

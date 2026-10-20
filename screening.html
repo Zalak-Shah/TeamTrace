@@ -619,6 +619,11 @@ a{
 
 <div class="doctype-grid">
 
+<button class="doctype-btn" onclick="selectDoc('Auto-Detect',this)">
+  <i class="ti ti-sparkles"></i>
+  Auto-Detect
+</button>
+
 <button class="doctype-btn active" onclick="selectDoc('Passport',this)">
   <i class="ti ti-book-2"></i>
   Passport
@@ -1583,7 +1588,8 @@ async function startScreening(){
     const formData = new FormData();
 
     formData.append("file", selectedFile);
-    formData.append("expected_document_type", selectedDocumentType);
+    const docTypeToSend = (selectedDocumentType === "Auto-Detect") ? "auto" : selectedDocumentType;
+    formData.append("expected_document_type", docTypeToSend);
     if(selectedSelfieFile){
       formData.append("selfie", selectedSelfieFile);
     }
@@ -1860,14 +1866,32 @@ function showResults(data){
         </div>`;
     }
 
-    /* ── Safe get from docInfo, also try extracted_fields as fallback ── */
+    /* ── Safe get from docInfo, also try extracted_fields / mrzData as fallback ── */
     const ef = data.extracted_fields || {};
     function fi(key){
       const v = docInfo[key];
       if(v && v !== "Not detected") return v;
       /* Fallback: check extracted_fields for name/doc_number */
-      if(key === "name" && ef.name_guess) return ef.name_guess;
-      if(key === "document_number" && ef.document_number) return ef.document_number;
+      if(key === "name"){
+        if(ef.name_guess) return ef.name_guess;
+        if(mrzData && mrzData.name) return mrzData.name;
+      }
+      if(key === "document_number"){
+        if(ef.document_number) return ef.document_number;
+        if(mrzData && mrzData.doc_number) return mrzData.doc_number;
+      }
+      if(key === "nationality" && mrzData && mrzData.nationality){
+        return mrzData.nationality;
+      }
+      if(key === "date_of_birth" && mrzData && mrzData.date_of_birth){
+        return mrzData.date_of_birth;
+      }
+      if(key === "date_of_expiry" && mrzData && mrzData.expiry_date){
+        return mrzData.expiry_date;
+      }
+      if(key === "sex" && mrzData && mrzData.sex){
+        return mrzData.sex;
+      }
       return v || "Not detected";
     }
 

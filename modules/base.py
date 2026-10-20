@@ -22,6 +22,8 @@ DocumentType = Literal[
     "passport",
     "driving_licence",
     "visa",
+    "national_id",
+    "permit",
     "unknown",
 ]
 

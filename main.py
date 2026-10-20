@@ -58,6 +58,8 @@ from modules.passport import PassportVerifier
 from modules.pan import PanVerifier
 from modules.driving_licence import DrivingLicenceVerifier
 from modules.visa import VisaVerifier
+from modules.permit import PermitVerifier
+from modules.national_id import NationalIdVerifier
 from modules.forensics import run_ai_and_tamper_forensics
 from modules.opencv_forensics import (
     run_ela_check,
@@ -217,6 +219,18 @@ DL_NUMBER_LEGACY_RE = re.compile(
 # ---- Voter ID (EPIC): 3 alpha + 7 digits ----
 VOTER_ID_RE = re.compile(
     r"\b[A-Z]{3}[0-9]{7}\b",
+    re.IGNORECASE,
+)
+
+# ---- Permit number regex ----
+PERMIT_NUMBER_RE = re.compile(
+    r"\b(?:permit|pmt)[\s#.:-]*([A-Z0-9-]{5,20})\b",
+    re.IGNORECASE,
+)
+
+# ---- National ID generic regex ----
+NATIONAL_ID_RE = re.compile(
+    r"\b(?:id|identity)[\s#.:-]*([A-Z0-9-]{5,20})\b",
     re.IGNORECASE,
 )
 
@@ -385,7 +399,32 @@ def classify_document(text: str) -> str:
         if DL_NUMBER_RE.search(text) and scores.get("Driving Licence", 0) >= 1:
             return "Driving Licence"
 
-    # ---- 5. Voter ID ----
+    # ---- 5. Visa (check before generic permit if visa keyword present) ----
+    _visa_kw = (
+        "visa" in lower or "visa number" in lower or "visa type" in lower
+    )
+    if _visa_kw and "passport" not in lower:
+        return "Visa"
+
+    # ---- 6. Permit ----
+    _permit_kw = (
+        "permit" in lower or "residence permit" in lower
+        or "work permit" in lower or "permit number" in lower
+        or "entry permit" in lower
+    )
+    if _permit_kw and "passport" not in lower and "visa" not in lower:
+        return "Permit"
+
+    # ---- 7. Passport (keyword fallback - requires passport or ministry of external affairs) ----
+    _passport_kw = (
+        "passport" in lower
+        or "ministry of external affairs" in lower
+        or ("republic of india" in lower and ("surname" in lower or "given name" in lower))
+    )
+    if _passport_kw or (INDIAN_PASSPORT_RE.search(text) and scores.get("Passport", 0) >= 1):
+        return "Passport"
+
+    # ---- 8. Voter ID ----
     _voter_kw = (
         "election commission" in lower or "electors photo" in lower
         or "epic" in lower or "voter" in lower or "constituency" in lower
@@ -393,33 +432,12 @@ def classify_document(text: str) -> str:
     if _voter_kw or (VOTER_ID_RE.search(text) and scores.get("Voter ID", 0) >= 1):
         return "Voter ID"
 
-    # ---- 6. Passport (keyword fallback) ----
-    _passport_kw = (
-        "passport" in lower or "surname" in lower
-        or "given name" in lower or "place of birth" in lower
-        or "date of expiry" in lower or "ministry of external affairs" in lower
-    )
-    if _passport_kw or (INDIAN_PASSPORT_RE.search(text) and scores.get("Passport", 0) >= 1):
-        return "Passport"
-
-    # ---- 7. Visa ----
-    if (
-        scores.get("Visa", 0) >= 2
-        or "visa number" in lower or "visa type" in lower
-        or "valid until" in lower or "port of entry" in lower
-    ):
-        return "Visa"
-
-    # ---- 8. National ID ----
+    # ---- 9. National ID ----
     if (
         scores.get("National ID", 0) >= 1
         or "national identity" in lower or "identity card" in lower
     ):
         return "National ID"
-
-    # ---- 9. Permit ----
-    if scores.get("Permit", 0) >= 2 or "permit number" in lower:
-        return "Permit"
 
     # ---- 10. Best keyword score ----
     if scores:
@@ -434,9 +452,26 @@ def classify_document(text: str) -> str:
 # MRZ PARSER
 # ============================================================
 
+def compute_icao_check_digit(data: str) -> int:
+    """Computes ICAO Doc 9303 check digit using 7-3-1 weighting algorithm."""
+    weights = [7, 3, 1]
+    total = 0
+    for idx, ch in enumerate(data):
+        if ch == "<":
+            val = 0
+        elif ch.isdigit():
+            val = int(ch)
+        elif "A" <= ch.upper() <= "Z":
+            val = ord(ch.upper()) - ord("A") + 10
+        else:
+            val = 0
+        total += val * weights[idx % 3]
+    return total % 10
+
+
 def parse_mrz(text: str):
     """
-    Parse a standard passport TD3 MRZ.
+    Parse a standard passport TD3 MRZ and validate check digits.
 
     Returns:
         name
@@ -446,6 +481,8 @@ def parse_mrz(text: str):
         sex
         expiry_date
         dates
+        check_digits_valid
+        mrz_checks
     """
 
     if not text:
@@ -459,7 +496,7 @@ def parse_mrz(text: str):
         if not line:
             continue
 
-    # OCR may convert MRZ filler characters into spaces.
+        # OCR may convert MRZ filler characters into spaces.
         line = line.replace(" ", "<")
 
         # Keep only characters valid in an MRZ.
@@ -473,17 +510,18 @@ def parse_mrz(text: str):
             normalized_lines.append(line)
 
     # --------------------------------------------------------
-    # FIND TWO CONSECUTIVE TD3 MRZ LINES
+    # FIND TWO CONSECUTIVE TD3 MRZ LINES (44 chars each)
     # --------------------------------------------------------
 
     for i in range(len(normalized_lines) - 1):
         line1 = normalized_lines[i]
         line2 = normalized_lines[i + 1]
 
-        # Passport MRZ line 1 normally begins with P<
+        # Passport MRZ line 1 normally begins with P< or PK
         if not (
             line1.startswith("P<")
             or line1.startswith("PK")
+            or line1.startswith("P") and len(line1) >= 40 and "<<" in line1
         ):
             continue
 
@@ -549,6 +587,8 @@ def parse_mrz(text: str):
         # 20    sex
         # 21-26 expiry
         # 27    expiry check digit
+        # 28-42 optional
+        # 43    composite check digit
         # ----------------------------------------------------
 
         if len(line2) < 28:
@@ -560,6 +600,9 @@ def parse_mrz(text: str):
             .strip()
         )
 
+        raw_doc_num = line2[0:9]
+        doc_num_check = line2[9] if len(line2) > 9 else ""
+
         nationality = (
             line2[10:13]
             .replace("<", "")
@@ -567,8 +610,13 @@ def parse_mrz(text: str):
         )
 
         dob_raw = line2[13:19]
+        dob_check = line2[19] if len(line2) > 19 else ""
+
         sex = line2[20:21]
         expiry_raw = line2[21:27]
+        expiry_check = line2[27] if len(line2) > 27 else ""
+
+        composite_check = line2[43] if len(line2) >= 44 else ""
 
         date_values = []
 
@@ -622,8 +670,7 @@ def parse_mrz(text: str):
             mm = int(expiry_raw[2:4])
             dd = int(expiry_raw[4:6])
 
-            # Passport MRZ expiry years are treated
-            # as 2000-2099.
+            # Passport MRZ expiry years are treated as 2000-2099
             full_year = 2000 + yy
 
             try:
@@ -643,11 +690,46 @@ def parse_mrz(text: str):
                 pass
 
         # ----------------------------------------------------
+        # ICAO DOC 9303 CHECK DIGIT VALIDATION
+        # ----------------------------------------------------
+        check_details = {}
+        all_checks_valid = True
+
+        if doc_num_check.isdigit():
+            expected_doc_check = compute_icao_check_digit(raw_doc_num)
+            is_valid = int(doc_num_check) == expected_doc_check
+            check_details["document_number"] = is_valid
+            if not is_valid:
+                all_checks_valid = False
+
+        if dob_check.isdigit() and re.fullmatch(r"\d{6}", dob_raw):
+            expected_dob_check = compute_icao_check_digit(dob_raw)
+            is_valid = int(dob_check) == expected_dob_check
+            check_details["date_of_birth"] = is_valid
+            if not is_valid:
+                all_checks_valid = False
+
+        if expiry_check.isdigit() and re.fullmatch(r"\d{6}", expiry_raw):
+            expected_exp_check = compute_icao_check_digit(expiry_raw)
+            is_valid = int(expiry_check) == expected_exp_check
+            check_details["expiry_date"] = is_valid
+            if not is_valid:
+                all_checks_valid = False
+
+        if composite_check.isdigit() and len(line2) >= 44:
+            comp_data = line2[0:10] + line2[13:20] + line2[21:43]
+            expected_comp = compute_icao_check_digit(comp_data)
+            is_valid = int(composite_check) == expected_comp
+            check_details["composite"] = is_valid
+            if not is_valid:
+                all_checks_valid = False
+
+        # ----------------------------------------------------
         # RETURN PARSED MRZ
         # ----------------------------------------------------
 
         if not doc_number:
-            return None
+            continue
 
         return {
             "name": mrz_name,
@@ -657,6 +739,8 @@ def parse_mrz(text: str):
             "sex": sex if sex in ("M", "F") else None,
             "expiry_date": expiry_date,
             "dates": date_values,
+            "check_digits_valid": all_checks_valid,
+            "mrz_checks": check_details,
         }
 
     return None
@@ -679,6 +763,9 @@ def extract_document_number(
         m = INDIAN_PASSPORT_RE.search(text)
         if m:
             return m.group(0).upper()
+        m_gen = PASSPORT_NUMBER_RE.search(text)
+        if m_gen:
+            return m_gen.group(0).upper()
 
     elif doc_type == "Aadhaar":
         m = AADHAAR_NUMBER_RE.search(text)
@@ -704,6 +791,21 @@ def extract_document_number(
         if m:
             return m.group(0).upper()
 
+    elif doc_type == "Visa":
+        m_visa = re.search(r"\b(?:visa[\s#.:-]*|v-)([A-Z0-9-]{6,15})\b", text, re.IGNORECASE)
+        if m_visa:
+            return m_visa.group(1).upper()
+
+    elif doc_type == "Permit":
+        m_permit = PERMIT_NUMBER_RE.search(text)
+        if m_permit:
+            return m_permit.group(1).upper()
+
+    elif doc_type == "National ID":
+        m_nid = NATIONAL_ID_RE.search(text)
+        if m_nid:
+            return m_nid.group(1).upper()
+
     return None
 
 
@@ -725,14 +827,26 @@ def extract_dates(text: str) -> list:
 # ============================================================
 
 def guess_name(text: str) -> Optional[str]:
+    """
+    Universal name extraction with priority:
+    1. MRZ (Passport / Visa)
+    2. Label-anchored extraction (Given Names, Surname, Name, etc.)
+    3. Safe heuristic fallback with comprehensive stopword filtering
+    """
+    if not text:
+        return None
+
+    # Try name_extraction module first for high accuracy
+    try:
+        from name_extraction import guess_name as universal_guess_name
+        name = universal_guess_name(text)
+        if name:
+            return name
+    except Exception:
+        pass
 
     mrz = parse_mrz(text)
-
-    if (
-        mrz
-        and mrz.get("name")
-        and mrz["name"] != "Unknown"
-    ):
+    if mrz and mrz.get("name") and mrz["name"] != "Unknown":
         return mrz["name"]
 
     skip_words = {
@@ -876,11 +990,9 @@ def extract_document_information(
 
                 label_lower = label.lower()
 
-                # Case 1:
-                # "Date of Birth: 23/04/1984"
+                # Case 1: Label and value on same line: e.g. "Entries: MULTIPLE"
                 pattern = (
-                    re.escape(label_lower)
-                    + r"\s*[:\-#]?\s*(.+)$"
+                    rf"\b{re.escape(label_lower)}\b\s*[:\-#]\s*(.+)$"
                 )
 
                 match = re.search(
@@ -889,29 +1001,16 @@ def extract_document_information(
                 )
 
                 if match:
-
                     start = match.start(1)
-
                     original_value = line[start:]
-
-                    original_value = clean_value(
-                        original_value
-                    )
-
+                    original_value = clean_value(original_value)
                     if original_value:
                         return original_value[:max_length]
 
-                # Case 2:
-                # Label on one line,
-                # value on next line.
-                if label_lower in lower_line:
-
+                # Case 2: Label alone on line (or with colon), value on next line
+                if re.fullmatch(rf"\b{re.escape(label_lower)}\b\s*[:\-#]?", lower_line):
                     if index + 1 < len(lines):
-
-                        next_value = clean_value(
-                            lines[index + 1]
-                        )
-
+                        next_value = clean_value(lines[index + 1])
                         if next_value:
                             return next_value[:max_length]
 
@@ -1323,41 +1422,43 @@ def extract_document_information(
                     )
 
         # ----------------------------------------------------
-        # 7. FALLBACK DATE ORDER
+        # 7. LOGICAL DATE ROLE DISTRIBUTION
         # ----------------------------------------------------
-        #
-        # For the OCR sample:
-        #
-        # 23 APR/AVR 1984 -> DOB
-        # 25 STY/JAN 2023 -> ISSUE
-        # 25 STY/JAN 2033 -> EXPIRY
-        # ----------------------------------------------------
-
         if passport_dates:
+            parsed_dates_list = []
+            for d_str in passport_dates:
+                td = to_date(d_str)
+                if td:
+                    parsed_dates_list.append((td, d_str))
 
-            if (
-                not information["date_of_birth"]
-                and len(passport_dates) >= 1
-            ):
-                information["date_of_birth"] = (
-                    passport_dates[0]
-                )
+            if parsed_dates_list:
+                parsed_dates_list.sort(key=lambda x: x[0])
+                today_d = date.today()
 
-            if (
-                not information["date_of_issue"]
-                and len(passport_dates) >= 2
-            ):
-                information["date_of_issue"] = (
-                    passport_dates[1]
-                )
+                # If missing DOB, pick oldest date that is in the past
+                if not information["date_of_birth"]:
+                    past_dates = [x for x in parsed_dates_list if x[0] <= today_d]
+                    if past_dates:
+                        information["date_of_birth"] = past_dates[0][1]
 
-            if (
-                not information["date_of_expiry"]
-                and len(passport_dates) >= 3
-            ):
-                information["date_of_expiry"] = (
-                    passport_dates[2]
-                )
+                # If missing expiry, pick future date or latest date
+                if not information["date_of_expiry"]:
+                    future_dates = [x for x in parsed_dates_list if x[0] >= today_d]
+                    if future_dates:
+                        information["date_of_expiry"] = future_dates[-1][1]
+                    elif len(parsed_dates_list) >= 2:
+                        information["date_of_expiry"] = parsed_dates_list[-1][1]
+
+                # If missing issue date, pick intermediate date
+                if not information["date_of_issue"]:
+                    middle_candidates = [
+                        x for x in parsed_dates_list
+                        if (not information["date_of_birth"] or x[1] != information["date_of_birth"])
+                        and (not information["date_of_expiry"] or x[1] != information["date_of_expiry"])
+                        and x[0] <= today_d
+                    ]
+                    if middle_candidates:
+                        information["date_of_issue"] = middle_candidates[0][1]
 
         # ----------------------------------------------------
         # 8. SEX FALLBACK
@@ -3222,6 +3323,7 @@ async def screen_document(
     doc_type = classify_document(
         text
     )
+    expected = (expected_document_type or "").strip().lower()
 
     # If the officer explicitly specified the document type (e.g. 'Driving Licence'),
     # and the OCR text contains corroborating clues (DL number format or keywords),
@@ -3242,16 +3344,13 @@ async def screen_document(
         "visa": "visa",
         "national id": "national id",
         "permit": "permit",
-        "aadhaar": "national id",
+        "aadhaar": "aadhaar",
+        "aadhar": "aadhaar",
         "pan card": "pan card",
+        "pan": "pan card",
+        "pancard": "pan card",
+        "voter id": "voter id",
     }
-
-    expected = (
-        expected_document_type
-        .strip()
-        .lower()
-    )
-
     detected = (
         doc_type
         .strip()
@@ -3266,6 +3365,13 @@ async def screen_document(
     detected_normalized = aliases.get(
         detected,
         detected,
+    )
+
+    # Permit compatibility: If expected is National ID and detected is Aadhaar, accept as valid match
+    is_compatible_type = (
+        expected_normalized == detected_normalized
+        or expected_normalized in ("auto", "unknown", "")
+        or (expected_normalized == "national id" and detected_normalized == "aadhaar")
     )
 
     # ========================================================
@@ -3288,10 +3394,7 @@ async def screen_document(
     # TYPE MISMATCH
     # ========================================================
 
-    if (
-        expected_normalized
-        != detected_normalized
-    ):
+    if not is_compatible_type:
 
         issues.append(
             {
@@ -3509,13 +3612,15 @@ async def screen_document(
         "pan": PanVerifier(),
         "driving_licence": DrivingLicenceVerifier(),
         "visa": VisaVerifier(),
+        "national_id": NationalIdVerifier(),
+        "permit": PermitVerifier(),
     }
 
     verifier = verifier_map.get(detected_slug)
     if not verifier:
         # Fallback to declared document type
         norm_declared = expected_document_type.lower().replace(" ", "_")
-        verifier = verifier_map.get(norm_declared, VisaVerifier())
+        verifier = verifier_map.get(norm_declared, NationalIdVerifier() if "national" in norm_declared else VisaVerifier())
 
     module_verification = verifier.verify(
         file_bytes=file_bytes,
@@ -4044,4 +4149,4 @@ def list_fraud_api(
 # Serves index.html, screening.html, common.js, style.css …
 # ============================================================
 
-app.mount("/", StaticFiles(directory=".", html=True), name="static")
+app.mount("/", StaticFiles(directory=".", html=True), name="static")
