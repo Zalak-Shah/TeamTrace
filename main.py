@@ -2891,88 +2891,27 @@ def perform_ocr(
             "OCREngine": "2",
         }
 
-        max_retries = 1
-        base_delay = 0
-
-        for attempt in range(max_retries):
-
+        # Try OCR with 25s timeout (8s is often too fast for high-res images over network)
+        for engine in ("2", "1"):
+            data["OCREngine"] = engine
             try:
-
                 response = requests.post(
                     url,
-                    files=files,
+                    files={"file": (filename, file_bytes)},
                     data=data,
-                    timeout=8,
+                    timeout=25,
                 )
 
-                if response.status_code in (
-                    429,
-                    500,
-                    502,
-                    503,
-                    504,
-                ):
-
-                    print(
-                        "OCR.space temporary error "
-                        f"{response.status_code}. "
-                        "Retrying..."
-                    )
-
-                    time.sleep(
-                        base_delay
-                    )
-
-                    continue
-
-                response.raise_for_status()
-
-                result = response.json()
-
-                if result.get(
-                    "IsErroredOnProcessing"
-                ):
-
-                    print(
-                        "OCR.space processing error:",
-                        result.get(
-                            "ErrorMessage"
-                        ),
-                    )
-
-                    break
-
-                parsed_results = result.get(
-                    "ParsedResults",
-                    [],
-                )
-
-                if parsed_results:
-
-                    return "\n".join(
-                        item.get(
-                            "ParsedText",
-                            "",
-                        )
-                        for item in parsed_results
-                    )
-
-                return ""
-
-            except requests.exceptions.RequestException as error:
-
-                print(
-                    "OCR.space network error "
-                    f"on attempt {attempt + 1}: "
-                    f"{error}"
-                )
-
-                if base_delay > 0:
-                    time.sleep(
-                        base_delay * (
-                            2 ** attempt
-                        )
-                    )
+                if response.status_code == 200:
+                    result = response.json()
+                    if not result.get("IsErroredOnProcessing"):
+                        parsed_results = result.get("ParsedResults", [])
+                        if parsed_results:
+                            extracted_ocr = "\n".join(item.get("ParsedText", "") for item in parsed_results)
+                            if len(extracted_ocr.strip()) > 5:
+                                return extracted_ocr
+            except Exception as ocr_err:
+                print(f"OCR.space request with engine {engine} error: {ocr_err}")
 
     # ========================================================
     # LOCAL FALLBACK
