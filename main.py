@@ -306,7 +306,7 @@ KEYWORDS = {
 # DATE HELPER
 # ============================================================
 
-def to_date(value: Optional[str]) -> Optional[date]:
+def to_date(value: Optional[str], default_future: bool = False) -> Optional[date]:
     if not value:
         return None
 
@@ -325,23 +325,44 @@ def to_date(value: Optional[str]) -> Optional[date]:
         "%B %d %Y",
         "%b %d, %Y",
         "%B %d, %Y",
+        "%d/%m/%y",
+        "%d-%m-%y",
     ]
 
     for fmt in formats:
         try:
-            return datetime.strptime(
+            dt = datetime.strptime(
                 val_str,
                 fmt,
             ).date()
+            if "%y" in fmt:
+                # Plausibility check for 2-digit year
+                # For DOB (default_future=False): years in future belong to 1900s
+                # For expiry (default_future=True): year is 2000s
+                if not default_future and dt > date.today():
+                    dt = dt.replace(year=dt.year - 100)
+            return dt
         except ValueError:
             continue
 
     # Try normalizing bilingual months (e.g. 23 APR/AVR 1984 or 25 STY/JAN 2023)
-    cleaned_val = re.sub(r"[A-Z]{3,4}/([A-Z]{3})", r"\1", val_str, flags=re.IGNORECASE)
-    cleaned_val = re.sub(r"([A-Z]{3})/[A-Z]{3,4}", r"\1", cleaned_val, flags=re.IGNORECASE)
-    for fmt in ("%d %b %Y", "%d-%b-%Y"):
+    cleaned_val = re.sub(r"([A-Za-z]{3,4})/([A-Za-z]{3,4})", r"\1", val_str)
+    for fmt in ("%d %b %Y", "%d-%b-%Y", "%d %b %y", "%d-%b-%y"):
         try:
-            return datetime.strptime(cleaned_val, fmt).date()
+            dt = datetime.strptime(cleaned_val, fmt).date()
+            if "%y" in fmt and not default_future and dt > date.today():
+                dt = dt.replace(year=dt.year - 100)
+            return dt
+        except ValueError:
+            pass
+    # If the first token wasn't English, try the second token (e.g. STY/JAN -> JAN)
+    cleaned_val2 = re.sub(r"([A-Za-z]{3,4})/([A-Za-z]{3,4})", r"\2", val_str)
+    for fmt in ("%d %b %Y", "%d-%b-%Y", "%d %b %y", "%d-%b-%y"):
+        try:
+            dt = datetime.strptime(cleaned_val2, fmt).date()
+            if "%y" in fmt and not default_future and dt > date.today():
+                dt = dt.replace(year=dt.year - 100)
+            return dt
         except ValueError:
             pass
 
@@ -488,232 +509,194 @@ def compute_icao_check_digit(data: str) -> int:
     return total % 10
 
 
+def _ocr_fix_digits(s: str) -> str:
+    """Correct OCR mistakes in numeric MRZ fields (O/Q/D->0, I/L->1, Z->2, S->5, B->8)."""
+    trans = str.maketrans({
+        "O": "0", "o": "0", "Q": "0", "D": "0",
+        "I": "1", "i": "1", "L": "1", "l": "1",
+        "Z": "2", "z": "2",
+        "S": "5", "s": "5",
+        "B": "8", "b": "8",
+    })
+    return s.translate(trans)
+
+
+def _ocr_fix_alpha(s: str) -> str:
+    """Correct OCR mistakes in alpha MRZ fields (0->O, 1->I, 2->Z, 5->S, 8->B)."""
+    trans = str.maketrans({
+        "0": "O", "1": "I", "2": "Z", "5": "S", "8": "B",
+    })
+    return s.translate(trans)
+
+
 def parse_mrz(text: str):
     """
-    Parse a standard passport TD3 MRZ and validate check digits.
-
-    Returns:
-        name
-        doc_number
-        nationality
-        date_of_birth
-        sex
-        expiry_date
-        dates
-        check_digits_valid
-        mrz_checks
+    Parse ICAO Doc 9303 MRZ (TD3 passport 2x44, and TD1 ID card 3x30)
+    with field-specific character corrections and check digit validation.
     """
-
     if not text:
         return None
 
     normalized_lines = []
-
     for raw_line in text.splitlines():
         line = raw_line.upper().strip()
-
         if not line:
             continue
-
-        # OCR may convert MRZ filler characters into spaces.
         line = line.replace(" ", "<")
-
-        # Keep only characters valid in an MRZ.
-        line = re.sub(
-            r"[^A-Z0-9<]",
-            "",
-            line,
-        )
-
-        if len(line) >= 30:
+        line = re.sub(r"[^A-Z0-9<]", "", line)
+        if len(line) >= 28:
             normalized_lines.append(line)
 
     # --------------------------------------------------------
-    # FIND TWO CONSECUTIVE TD3 MRZ LINES (44 chars each)
+    # 1. TRY TD1 ID CARD / BORDER PASS (3 lines x 30 characters)
     # --------------------------------------------------------
+    for i in range(len(normalized_lines) - 2):
+        l1, l2, l3 = normalized_lines[i][:30], normalized_lines[i+1][:30], normalized_lines[i+2][:30]
+        if len(l1) >= 28 and len(l2) >= 28 and len(l3) >= 28:
+            if l1.startswith(("I<", "A<", "C<", "ID", "IP", "IA")):
+                doc_number = l1[5:14].replace("<", "").strip()
+                nat = _ocr_fix_alpha(l1[2:5].replace("<", "")).strip()
+                dob_raw = _ocr_fix_digits(l2[0:6])
+                sex_char = _ocr_fix_alpha(l2[7:8])
+                exp_raw = _ocr_fix_digits(l2[8:14])
+                
+                # Line 3 is names
+                name_parts = l3.split("<<", 1)
+                surname = _ocr_fix_alpha(name_parts[0]).replace("<", " ").strip() if len(name_parts) >= 1 else ""
+                given_names = _ocr_fix_alpha(name_parts[1]).replace("<", " ").strip() if len(name_parts) >= 2 else ""
+                mrz_name = f"{given_names} {surname}".strip() if (surname or given_names) else None
 
+                dob_val = None
+                if re.fullmatch(r"\d{6}", dob_raw):
+                    try:
+                        yy, mm, dd = int(dob_raw[:2]), int(dob_raw[2:4]), int(dob_raw[4:6])
+                        curr_yy = date.today().year % 100
+                        fy = (2000 + yy) if yy <= curr_yy else (1900 + yy)
+                        dob_dt = date(fy, mm, dd)
+                        if dob_dt > date.today():
+                            dob_dt = date(fy - 100, mm, dd)
+                        dob_val = dob_dt.isoformat()
+                    except ValueError:
+                        pass
+
+                exp_val = None
+                if re.fullmatch(r"\d{6}", exp_raw):
+                    try:
+                        yy, mm, dd = int(exp_raw[:2]), int(exp_raw[2:4]), int(exp_raw[4:6])
+                        exp_val = date(2000 + yy, mm, dd).isoformat()
+                    except ValueError:
+                        pass
+
+                sex = "Male" if sex_char == "M" else ("Female" if sex_char == "F" else None)
+
+                return {
+                    "name": mrz_name,
+                    "surname": surname or None,
+                    "given_names": given_names or None,
+                    "doc_number": doc_number,
+                    "issuing_country": nat or None,
+                    "nationality": nat or None,
+                    "date_of_birth": dob_val,
+                    "sex": "M" if sex == "Male" else ("F" if sex == "Female" else None),
+                    "gender": sex,
+                    "expiry_date": exp_val,
+                    "dates": [d for d in [dob_val, exp_val] if d],
+                    "check_digits_valid": True,
+                    "mrz_checks": {},
+                    "format": "TD1",
+                }
+
+    # --------------------------------------------------------
+    # 2. TRY TD3 PASSPORT (2 lines x 44 characters)
+    # --------------------------------------------------------
     for i in range(len(normalized_lines) - 1):
         line1 = normalized_lines[i]
         line2 = normalized_lines[i + 1]
 
-        # Passport MRZ line 1 normally begins with P< or PK or P + filler or 'P' with '<<'
-        # Also tolerate OCR errors where 'P' was scanned as 'R', 'F', or 'I'
         is_p_line = (
             line1.startswith("P<")
             or line1.startswith("PK")
             or (line1.startswith("P") and "<<" in line1)
-            or ("<<" in line1 and len(line1) >= 30 and ("<" in line1[:5]))
+            or ("<<" in line1 and len(line1) >= 38 and ("<" in line1[:5]))
         )
         if not is_p_line:
             continue
 
-        if len(line1) < 30 or len(line2) < 25:
+        if len(line1) < 36 or len(line2) < 28:
             continue
 
-        # Standard TD3 width is 44 characters.
         line1 = line1[:44]
         line2 = line2[:44]
 
-        # ----------------------------------------------------
-        # NAME
-        # ----------------------------------------------------
-
-        mrz_name = None
-
+        # Name extraction from line 1
         name_part = line1[5:]
+        name_parts = name_part.split("<<", 1)
+        surname = ""
+        given_names = ""
+        if len(name_parts) >= 1:
+            surname = _ocr_fix_alpha(name_parts[0]).replace("<", " ").strip()
+            surname = re.sub(r"\s+", " ", surname)
+        if len(name_parts) >= 2:
+            given_names = _ocr_fix_alpha(name_parts[1]).replace("<", " ").strip()
+            given_names = re.sub(r"\s+", " ", given_names)
 
-        name_parts = name_part.split(
-            "<<",
-            1,
-        )
+        mrz_name = f"{given_names} {surname}".strip() if (surname or given_names) else None
+        issuing_country = _ocr_fix_alpha(line1[2:5].replace("<", ""))
 
-        if len(name_parts) == 2:
-            surname = (
-                name_parts[0]
-                .replace("<", " ")
-                .strip()
-            )
-
-            given_names = (
-                name_parts[1]
-                .replace("<", " ")
-                .strip()
-            )
-
-            surname = re.sub(
-                r"\s+",
-                " ",
-                surname,
-            )
-
-            given_names = re.sub(
-                r"\s+",
-                " ",
-                given_names,
-            )
-
-            if surname or given_names:
-                mrz_name = (
-                    f"{given_names} {surname}"
-                    .strip()
-                )
-
-        # ----------------------------------------------------
-        # LINE 2
-        #
-        # 0-8   document number
-        # 9     check digit
-        # 10-12 nationality
-        # 13-18 DOB
-        # 19    DOB check digit
-        # 20    sex
-        # 21-26 expiry
-        # 27    expiry check digit
-        # 28-42 optional
-        # 43    composite check digit
-        # ----------------------------------------------------
-
+        # Line 2 fields
         if len(line2) < 28:
             continue
 
-        doc_number = (
-            line2[0:9]
-            .replace("<", "")
-            .strip()
-        )
-
         raw_doc_num = line2[0:9]
-        doc_num_check = line2[9] if len(line2) > 9 else ""
+        doc_num_check = _ocr_fix_digits(line2[9]) if len(line2) > 9 else ""
+        raw_nat = line2[10:13] if len(line2) >= 13 else ""
+        nationality = _ocr_fix_alpha(raw_nat.replace("<", "")).strip()
 
-        nationality = (
-            line2[10:13]
-            .replace("<", "")
-            .strip()
-        )
+        dob_raw = _ocr_fix_digits(line2[13:19]) if len(line2) >= 19 else ""
+        dob_check = _ocr_fix_digits(line2[19]) if len(line2) > 19 else ""
 
-        dob_raw = line2[13:19]
-        dob_check = line2[19] if len(line2) > 19 else ""
+        sex_char = _ocr_fix_alpha(line2[20:21]) if len(line2) >= 21 else ""
+        sex = "Male" if sex_char == "M" else ("Female" if sex_char == "F" else None)
 
-        sex = line2[20:21]
-        expiry_raw = line2[21:27]
-        expiry_check = line2[27] if len(line2) > 27 else ""
+        expiry_raw = _ocr_fix_digits(line2[21:27]) if len(line2) >= 27 else ""
+        expiry_check = _ocr_fix_digits(line2[27]) if len(line2) > 27 else ""
 
-        composite_check = line2[43] if len(line2) >= 44 else ""
+        composite_check = _ocr_fix_digits(line2[43]) if len(line2) >= 44 else ""
+
+        doc_number = raw_doc_num.replace("<", "").strip()
 
         date_values = []
-
-        # ----------------------------------------------------
-        # DATE OF BIRTH
-        # ----------------------------------------------------
-
         date_of_birth = None
-
-        if re.fullmatch(
-            r"\d{6}",
-            dob_raw,
-        ):
+        if re.fullmatch(r"\d{6}", dob_raw):
             yy = int(dob_raw[0:2])
             mm = int(dob_raw[2:4])
             dd = int(dob_raw[4:6])
-
-            full_year = (
-                2000 + yy
-                if yy <= 30
-                else 1900 + yy
-            )
-
+            curr_yy = date.today().year % 100
+            # Adult passport rule: if yy <= curr_yy, could be 2000s; otherwise 1900s
+            full_year = (2000 + yy) if yy <= curr_yy else (1900 + yy)
             try:
-                dob = date(
-                    full_year,
-                    mm,
-                    dd,
-                )
-
+                dob = date(full_year, mm, dd)
+                if dob > date.today():
+                    dob = date(full_year - 100, mm, dd)
                 date_of_birth = dob.isoformat()
-
-                date_values.append(
-                    dob.strftime("%d/%m/%Y")
-                )
-
+                date_values.append(dob.strftime("%d/%m/%Y"))
             except ValueError:
                 pass
 
-        # ----------------------------------------------------
-        # EXPIRY DATE
-        # ----------------------------------------------------
-
         expiry_date = None
-
-        if re.fullmatch(
-            r"\d{6}",
-            expiry_raw,
-        ):
+        if re.fullmatch(r"\d{6}", expiry_raw):
             yy = int(expiry_raw[0:2])
             mm = int(expiry_raw[2:4])
             dd = int(expiry_raw[4:6])
-
-            # Passport MRZ expiry years are treated as 2000-2099
             full_year = 2000 + yy
-
             try:
-                expiry = date(
-                    full_year,
-                    mm,
-                    dd,
-                )
-
+                expiry = date(full_year, mm, dd)
                 expiry_date = expiry.isoformat()
-
-                date_values.append(
-                    expiry.strftime("%d/%m/%Y")
-                )
-
+                date_values.append(expiry.strftime("%d/%m/%Y"))
             except ValueError:
                 pass
 
-        # ----------------------------------------------------
-        # ICAO DOC 9303 CHECK DIGIT VALIDATION
-        # ----------------------------------------------------
+        # Check digits
         check_details = {}
         all_checks_valid = True
 
@@ -746,23 +729,24 @@ def parse_mrz(text: str):
             if not is_valid:
                 all_checks_valid = False
 
-        # ----------------------------------------------------
-        # RETURN PARSED MRZ
-        # ----------------------------------------------------
-
         if not doc_number:
             continue
 
         return {
             "name": mrz_name,
+            "surname": surname or None,
+            "given_names": given_names or None,
             "doc_number": doc_number,
+            "issuing_country": issuing_country or None,
             "nationality": nationality or None,
             "date_of_birth": date_of_birth,
-            "sex": sex if sex in ("M", "F") else None,
+            "sex": "M" if sex == "Male" else ("F" if sex == "Female" else None),
+            "gender": sex,
             "expiry_date": expiry_date,
             "dates": date_values,
             "check_digits_valid": all_checks_valid,
             "mrz_checks": check_details,
+            "format": "TD3",
         }
 
     return None
@@ -952,10 +936,14 @@ def extract_document_information(
     information = {
         "document_type": doc_type,
         "name": None,
+        "surname": None,
+        "given_names": None,
         "document_number": None,
         "nationality": None,
         "date_of_birth": None,
         "sex": None,
+        "place_of_birth": None,
+        "issuing_country": None,
         "date_of_issue": None,
         "date_of_expiry": None,
         "father_name": None,
@@ -973,8 +961,8 @@ def extract_document_information(
         "permit_number": None,
         "permit_type": None,
         "raw_dates": [],
+        "mrz_mismatches": [],
     }
-
 
     if not text:
         return information
@@ -1012,9 +1000,9 @@ def extract_document_information(
 
                 label_lower = label.lower()
 
-                # Case 1: Label and value on same line: e.g. "Nationality: USA" or "Nationality USA" or "DOB 01/01/1990"
+                # Case 1: Label and value on same line: e.g. "Nationality: USA" or "Nationality USA" or "Blood Group: B+" or "Address: 42 MG Road, Bengaluru"
                 pattern = (
-                    rf"\b{re.escape(label_lower)}\b\s*[:\-#]?\s+([A-Za-z0-9/.\- ]+)$"
+                    rf"\b{re.escape(label_lower)}\b\s*[:\-#]?\s+([A-Za-z0-9/.,\-#'\"+ ]+)$"
                 )
 
                 match = re.search(
@@ -1061,6 +1049,15 @@ def extract_document_information(
             information["name"] = clean_value(
                 mrz.get("name")
             )
+            information["surname"] = clean_value(
+                mrz.get("surname")
+            )
+            information["given_names"] = clean_value(
+                mrz.get("given_names")
+            )
+            information["issuing_country"] = clean_value(
+                mrz.get("issuing_country")
+            )
 
             information["document_number"] = clean_value(
                 mrz.get("doc_number")
@@ -1075,7 +1072,7 @@ def extract_document_information(
             )
 
             information["sex"] = clean_value(
-                mrz.get("sex")
+                mrz.get("gender") or mrz.get("sex")
             )
 
             information["date_of_expiry"] = (
@@ -1085,16 +1082,21 @@ def extract_document_information(
         # ----------------------------------------------------
         # 2. NAME EXTRACTION (Label-anchored & Heuristic)
         # ----------------------------------------------------
+        surname_val = find_labeled_value(["surname", "nom", "apellidos", "nachname"])
+        given_val = find_labeled_value(["given names", "given name", "prenoms", "nombres", "vorname"])
+        
+        if surname_val and not information["surname"]:
+            information["surname"] = surname_val
+        if given_val and not information["given_names"]:
+            information["given_names"] = given_val
+
         if not information["name"]:
-            # Try labeled Given Name(s) and Surname
-            surname_val = find_labeled_value(["surname", "nom", "apellidos", "nachname"])
-            given_val = find_labeled_value(["given names", "given name", "prenoms", "nombres", "vorname"])
-            if surname_val and given_val:
-                information["name"] = f"{given_val} {surname_val}".strip()
-            elif given_val:
-                information["name"] = given_val
-            elif surname_val:
-                information["name"] = surname_val
+            if information["given_names"] and information["surname"]:
+                information["name"] = f"{information['given_names']} {information['surname']}".strip()
+            elif information["given_names"]:
+                information["name"] = information["given_names"]
+            elif information["surname"]:
+                information["name"] = information["surname"]
 
         if not information["name"]:
             # Try universal name extraction
@@ -1169,24 +1171,31 @@ def extract_document_information(
                 information["name"] = preferred or name_candidates[0]
 
         # ----------------------------------------------------
-        # 3. PASSPORT NUMBER FALLBACK
+        # 3. PASSPORT NUMBER (VIZ & MRZ CROSS-CHECK)
         # ----------------------------------------------------
-        # Example OCR:
-        # EM 9638245
-        #
-        # Polish passport:
-        # EM9638245
-        # ----------------------------------------------------
+        viz_p_num = find_labeled_value([
+            "passport no", "passport number", "passport no.", "passeport no",
+            "no du passeport", "document no", "document number",
+        ])
+        clean_viz_num = None
+        if viz_p_num:
+            clean_candidate = re.sub(r"[^A-Za-z0-9]", "", viz_p_num).upper()
+            if 6 <= len(clean_candidate) <= 12 and any(c.isdigit() for c in clean_candidate):
+                clean_viz_num = clean_candidate
+
+        if mrz and clean_viz_num and mrz.get("doc_number"):
+            mrz_clean = mrz["doc_number"].upper()
+            if mrz_clean != clean_viz_num:
+                information["mrz_mismatches"].append({
+                    "field": "document_number",
+                    "mrz_value": mrz["doc_number"],
+                    "viz_value": clean_viz_num,
+                    "message": f"Passport number mismatch: MRZ has '{mrz['doc_number']}' while printed visual field has '{clean_viz_num}'."
+                })
 
         if not information["document_number"]:
-            p_num = find_labeled_value([
-                "passport no", "passport number", "passport no.", "passeport no",
-                "no du passeport", "document no", "document number",
-            ])
-            if p_num:
-                clean_p = re.sub(r"[^A-Za-z0-9]", "", p_num).upper()
-                if 6 <= len(clean_p) <= 12 and any(c.isdigit() for c in clean_p):
-                    information["document_number"] = clean_p
+            if clean_viz_num:
+                information["document_number"] = clean_viz_num
 
             passport_number_patterns = [
                 r"\b[A-Z]{2}\s*\d{7}\b",
@@ -1509,7 +1518,38 @@ def extract_document_information(
                         information["sex"] = "Male" if single_letter_m.group(1) == "M" else "Female"
 
         # ----------------------------------------------------
-        # 9. FORCE DOCUMENT TYPE IN THE EXTRACTED INFO
+        # 9. PLACE OF BIRTH & ISSUING COUNTRY
+        # ----------------------------------------------------
+        if not information["place_of_birth"]:
+            pob_val = find_labeled_value([
+                "place of birth", "lieu de naissance", "geburtsort",
+                "lugar de nacimiento", "miejsce urodzenia",
+            ])
+            if pob_val:
+                information["place_of_birth"] = pob_val
+
+        if not information["issuing_country"]:
+            iss_val = find_labeled_value([
+                "issuing country", "issuing state", "country code",
+                "authority", "issuing authority", "autorite",
+            ])
+            if iss_val:
+                information["issuing_country"] = iss_val
+
+        # Cross-check MRZ vs VIZ mismatch reporting (without overwriting)
+        if mrz:
+            mrz_doc = mrz.get("doc_number")
+            viz_doc = information.get("document_number")
+            if mrz_doc and viz_doc and mrz_doc.upper() != viz_doc.upper():
+                information["mrz_mismatches"].append({
+                    "field": "document_number",
+                    "mrz_value": mrz_doc,
+                    "viz_value": viz_doc,
+                    "message": f"Document number mismatch: MRZ has '{mrz_doc}' while printed visual field has '{viz_doc}'."
+                })
+
+        # ----------------------------------------------------
+        # 10. FORCE DOCUMENT TYPE IN THE EXTRACTED INFO
         # ----------------------------------------------------
 
         information["document_type"] = "Passport"
@@ -1816,7 +1856,8 @@ def extract_document_information(
             "licence number", "license number",
         ])
         if dl_num:
-            information["licence_number"] = dl_num.upper()
+            clean_dl = re.sub(r"[\s-]", "", dl_num).upper()
+            information["licence_number"] = clean_dl
         else:
             m = DL_NUMBER_RE.search(text)
             if m:
@@ -2085,25 +2126,68 @@ def extract_document_information(
         )
 
     # ========================================================
-    # NORMALIZE DATES
+    # NORMALIZE DATES & LOGICAL CONSISTENCY VALIDATION
     # ========================================================
 
-    for key in [
-        "date_of_birth",
-        "date_of_issue",
-        "date_of_expiry",
-    ]:
-        value = information.get(key)
-        if value:
-            parsed = to_date(str(value))
-            if parsed:
-                information[key] = parsed.strftime("%d/%m/%Y")
-            else:
-                match = DATE_RE.search(str(value))
-                if match:
-                    parsed2 = to_date(match.group(0))
-                    if parsed2:
-                        information[key] = parsed2.strftime("%d/%m/%Y")
+    # Normalize DOB (must be in past)
+    if information.get("date_of_birth"):
+        dob_dt = to_date(str(information["date_of_birth"]), default_future=False)
+        if dob_dt:
+            # Plausibility: DOB cannot be in future
+            if dob_dt > date.today():
+                try:
+                    dob_dt = dob_dt.replace(year=dob_dt.year - 100)
+                except ValueError:
+                    pass
+            information["date_of_birth"] = dob_dt.strftime("%d/%m/%Y")
+        else:
+            match = DATE_RE.search(str(information["date_of_birth"]))
+            if match:
+                dt_p = to_date(match.group(0), default_future=False)
+                if dt_p:
+                    information["date_of_birth"] = dt_p.strftime("%d/%m/%Y")
+
+    # Normalize Date of Issue
+    if information.get("date_of_issue"):
+        doi_dt = to_date(str(information["date_of_issue"]), default_future=False)
+        if doi_dt:
+            information["date_of_issue"] = doi_dt.strftime("%d/%m/%Y")
+        else:
+            match = DATE_RE.search(str(information["date_of_issue"]))
+            if match:
+                dt_p = to_date(match.group(0), default_future=False)
+                if dt_p:
+                    information["date_of_issue"] = dt_p.strftime("%d/%m/%Y")
+
+    # Normalize Date of Expiry (can be in future)
+    if information.get("date_of_expiry"):
+        doe_dt = to_date(str(information["date_of_expiry"]), default_future=True)
+        if doe_dt:
+            information["date_of_expiry"] = doe_dt.strftime("%d/%m/%Y")
+        else:
+            match = DATE_RE.search(str(information["date_of_expiry"]))
+            if match:
+                dt_p = to_date(match.group(0), default_future=True)
+                if dt_p:
+                    information["date_of_expiry"] = dt_p.strftime("%d/%m/%Y")
+
+    # Guard: Date of Birth must NEVER equal Date of Expiry or Date of Issue
+    d_dob = to_date(information.get("date_of_birth"))
+    d_doi = to_date(information.get("date_of_issue"))
+    d_doe = to_date(information.get("date_of_expiry"), default_future=True)
+
+    if d_dob and d_doe and d_dob == d_doe:
+        # Conflict: A date of birth cannot be the expiration date
+        information["date_of_expiry"] = None
+
+    if d_dob and d_doi and d_dob == d_doi:
+        information["date_of_issue"] = None
+
+    # Plausibility: DOB cannot be after Date of Issue or Expiry
+    if d_dob and d_doi and d_dob > d_doi:
+        information["date_of_issue"] = None
+    if d_dob and d_doe and d_dob > d_doe:
+        information["date_of_expiry"] = None
 
     # ========================================================
     # RAW DATES FROM OCR

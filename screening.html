@@ -1307,7 +1307,6 @@ function captureDocument(){
 
 }
 function handleFile(){
-
   const input = document.getElementById("fileInput");
 
   if(!input.files || input.files.length === 0){
@@ -1316,9 +1315,20 @@ function handleFile(){
 
   selectedFile = input.files[0];
 
+  /* Clear stale results from any previous screening run */
+  const resultsContainer = document.getElementById("stage-results");
+  if(resultsContainer){
+    resultsContainer.innerHTML = "";
+    resultsContainer.style.display = "none";
+  }
+  if(_previewURL){
+    try { URL.revokeObjectURL(_previewURL); } catch(e){}
+    _previewURL = null;
+  }
+
   document.getElementById("dropzone-text").innerHTML = `
     <strong style="color:var(--cyan);">
-      ${selectedFile.name}
+      ${escapeHTML(selectedFile.name)}
     </strong>
     <br>
     <span style="font-size:11px;color:var(--text-5);">
@@ -1870,32 +1880,55 @@ function showResults(data){
     const ef = data.extracted_fields || {};
     function fi(key){
       let v = docInfo[key];
-      if(key === "sex" && (!v || v === "Not detected")){
-        v = docInfo["gender"] || docInfo["Sex"] || docInfo["Gender"];
+      if((key === "sex" || key === "gender") && (!v || v === "Not detected")){
+        v = docInfo["sex"] || docInfo["gender"] || docInfo["Sex"] || docInfo["Gender"];
       }
       if(v && v !== "Not detected") return v;
       /* Fallback: check extracted_fields for name/doc_number */
       if(key === "name"){
-        if(ef.name_guess) return ef.name_guess;
+        if(docInfo.name) return docInfo.name;
         if(mrzData && mrzData.name) return mrzData.name;
+        if(ef.name_guess) return ef.name_guess;
+      }
+      if(key === "surname"){
+        if(docInfo.surname) return docInfo.surname;
+        if(mrzData && mrzData.surname) return mrzData.surname;
+      }
+      if(key === "given_names"){
+        if(docInfo.given_names) return docInfo.given_names;
+        if(mrzData && mrzData.given_names) return mrzData.given_names;
       }
       if(key === "document_number"){
-        if(ef.document_number) return ef.document_number;
+        if(docInfo.document_number) return docInfo.document_number;
         if(mrzData && mrzData.doc_number) return mrzData.doc_number;
+        if(ef.document_number) return ef.document_number;
       }
-      if(key === "nationality" && mrzData && mrzData.nationality){
-        return mrzData.nationality;
+      if(key === "nationality"){
+        if(docInfo.nationality) return docInfo.nationality;
+        if(mrzData && mrzData.nationality) return mrzData.nationality;
       }
-      if(key === "date_of_birth" && mrzData && mrzData.date_of_birth){
-        return mrzData.date_of_birth;
+      if(key === "date_of_birth"){
+        if(docInfo.date_of_birth) return docInfo.date_of_birth;
+        if(mrzData && mrzData.date_of_birth) return mrzData.date_of_birth;
       }
-      if(key === "date_of_expiry" && mrzData && mrzData.expiry_date){
-        return mrzData.expiry_date;
+      if(key === "date_of_expiry"){
+        if(docInfo.date_of_expiry) return docInfo.date_of_expiry;
+        if(mrzData && mrzData.expiry_date) return mrzData.expiry_date;
       }
-      if(key === "sex"){
-        if(mrzData && mrzData.sex) return mrzData.sex === "M" ? "Male" : mrzData.sex === "F" ? "Female" : mrzData.sex;
+      if(key === "sex" || key === "gender"){
+        if(docInfo.sex) return docInfo.sex;
+        if(docInfo.gender) return docInfo.gender;
+        if(mrzData && (mrzData.gender || mrzData.sex)) {
+          const s = mrzData.gender || mrzData.sex;
+          return s === "M" ? "Male" : (s === "F" ? "Female" : s);
+        }
         if(/\b(FEMALE|WOMAN)\b/i.test(ocrText)) return "Female";
         if(/\b(MALE|MAN)\b/i.test(ocrText)) return "Male";
+      }
+      if(key === "place_of_birth" && docInfo.place_of_birth) return docInfo.place_of_birth;
+      if(key === "issuing_country"){
+        if(docInfo.issuing_country) return docInfo.issuing_country;
+        if(mrzData && mrzData.issuing_country) return mrzData.issuing_country;
       }
       return v || "Not detected";
     }
@@ -1910,6 +1943,8 @@ function showResults(data){
     if(dt.includes("passport")){
       docFieldsHTML =
         fieldRow("Full Name",       fi("name")) +
+        (fi("surname") !== "Not detected" ? fieldRow("Surname", fi("surname")) : "") +
+        (fi("given_names") !== "Not detected" ? fieldRow("Given Name(s)", fi("given_names")) : "") +
         fieldRow("Passport Number", fi("document_number"), true) +
         fieldRow("Nationality",     fi("nationality")) +
         fieldRow("Date of Birth",   fi("date_of_birth")) +
