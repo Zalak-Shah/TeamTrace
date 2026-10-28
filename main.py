@@ -517,15 +517,18 @@ def parse_mrz(text: str):
         line1 = normalized_lines[i]
         line2 = normalized_lines[i + 1]
 
-        # Passport MRZ line 1 normally begins with P< or PK
-        if not (
+        # Passport MRZ line 1 normally begins with P< or PK or P + filler or 'P' with '<<'
+        # Also tolerate OCR errors where 'P' was scanned as 'R', 'F', or 'I'
+        is_p_line = (
             line1.startswith("P<")
             or line1.startswith("PK")
-            or line1.startswith("P") and len(line1) >= 40 and "<<" in line1
-        ):
+            or (line1.startswith("P") and "<<" in line1)
+            or ("<<" in line1 and len(line1) >= 30 and ("<" in line1[:5]))
+        )
+        if not is_p_line:
             continue
 
-        if len(line1) < 35 or len(line2) < 35:
+        if len(line1) < 30 or len(line2) < 25:
             continue
 
         # Standard TD3 width is 44 characters.
@@ -1061,18 +1064,30 @@ def extract_document_information(
             )
 
         # ----------------------------------------------------
-        # 2. NAME FALLBACK
+        # 2. NAME EXTRACTION (Label-anchored & Heuristic)
         # ----------------------------------------------------
-        # Example OCR:
-        # BORYS ANDRZEJ
-        #
-        # Do not accept:
-        # PASSPORT / PASZPORT / PASSPORY / PASSEPOR
-        # POL / MAZOWIECKIE / etc.
-        # ----------------------------------------------------
+        if not information["name"]:
+            # Try labeled Given Name(s) and Surname
+            surname_val = find_labeled_value(["surname", "nom", "apellidos", "nachname"])
+            given_val = find_labeled_value(["given names", "given name", "prenoms", "nombres", "vorname"])
+            if surname_val and given_val:
+                information["name"] = f"{given_val} {surname_val}".strip()
+            elif given_val:
+                information["name"] = given_val
+            elif surname_val:
+                information["name"] = surname_val
 
         if not information["name"]:
+            # Try universal name extraction
+            try:
+                from name_extraction import guess_name as universal_guess_name
+                u_name = universal_guess_name(text)
+                if u_name:
+                    information["name"] = u_name
+            except Exception:
+                pass
 
+        if not information["name"]:
             lines = [
                 clean_value(line)
                 for line in text.splitlines()
@@ -1080,90 +1095,59 @@ def extract_document_information(
             ]
 
             ignored_names = {
-                "PASSPORT",
-                "PASZPORT",
-                "PASSPORY",
-                "PASSEPOR",
-                "PASZPOR",
-                "POL",
-                "POLSKA",
-                "REPUBLIC",
-                "NATIONALITY",
-                "SURNAME",
-                "GIVEN NAME",
-                "NAME",
-                "SEX",
-                "MALE",
-                "FEMALE",
-                "MINISTRY",
-                "MAZOWIECKIE",
+                "PASSPORT", "PASZPORT", "PASSPORY", "PASSEPOR", "PASZPOR",
+                "POL", "POLSKA", "REPUBLIC", "NATIONALITY", "SURNAME",
+                "GIVEN NAME", "NAME", "SEX", "MALE", "FEMALE", "MINISTRY",
+                "MAZOWIECKIE", "UNITED", "STATES", "AMERICA", "UNITED STATES",
+                "UNITED STATES OF AMERICA", "USA", "DEPARTMENT", "STATE",
+                "DEPARTMENT OF STATE", "OFFICIAL", "GOVERNMENT", "INDIA",
+                "SPECIMEN", "SAMPLE", "TRAVEL", "DOCUMENT", "CAN", "CANADA",
+                "GBR", "GREAT BRITAIN", "DEUTSCHLAND", "FRANCE",
+            }
+
+            country_header_words = {
+                "UNITED", "STATES", "AMERICA", "USA", "REPUBLIC", "KINGDOM",
+                "DEPARTMENT", "STATE", "GOVERNMENT", "OFFICIAL", "PASSPORT",
+                "PASZPORT", "PASSEPORT", "NATIONALITY", "CITIZENSHIP", "MINISTRY",
+                "AUTHORITY", "SPECIMEN", "SAMPLE", "IMMIGRATION", "CUSTOMS",
             }
 
             name_candidates = []
 
             for line in lines:
-
                 candidate = re.sub(
                     r"[^A-Za-zÀ-ÖØ-öø-ÿ .'-]",
                     "",
                     line,
                 )
-
                 candidate = clean_value(candidate)
-
                 if not candidate:
                     continue
 
                 upper_candidate = candidate.upper()
-
                 if upper_candidate in ignored_names:
                     continue
 
-                if len(candidate) < 5:
-                    continue
-
-                if len(candidate) > 60:
-                    continue
-
-                # Reject obvious labels / OCR noise
-                if any(
-                    word in upper_candidate.split()
-                    for word in [
-                        "PASSPORT",
-                        "PASZPORT",
-                        "PASSPORY",
-                        "PASSEPOR",
-                        "NATIONALITY",
-                        "REPUBLIC",
-                        "MINISTRY",
-                        "VOIVODESHIP",
-                        "MAZOWIECKIE",
-                    ]
-                ):
-                    continue
-
-                # Person name should contain at least two words
                 words = upper_candidate.split()
+                if len(candidate) < 3 or len(candidate) > 60:
+                    continue
 
-                if len(words) >= 2:
+                # Filter out lines that are country headers or government agencies
+                if any(w in country_header_words for w in words):
+                    continue
+
+                if 1 <= len(words) <= 4:
                     name_candidates.append(candidate)
 
-            # Prefer a likely full personal name.
             if name_candidates:
-
+                # Prefer candidate with 2-3 words (First + Last name)
                 preferred = None
-
                 for candidate in name_candidates:
                     words = candidate.split()
-
-                    if 2 <= len(words) <= 4:
+                    if 2 <= len(words) <= 3:
                         preferred = candidate
                         break
-
-                information["name"] = (
-                    preferred
-                    or name_candidates[0]
-                )
+                information["name"] = preferred or name_candidates[0]
 
         # ----------------------------------------------------
         # 3. PASSPORT NUMBER FALLBACK
@@ -1461,20 +1445,35 @@ def extract_document_information(
                         information["date_of_issue"] = middle_candidates[0][1]
 
         # ----------------------------------------------------
-        # 8. SEX FALLBACK
+        # 8. SEX / GENDER EXTRACTION
         # ----------------------------------------------------
+        if not information["sex"]:
+            # Try labeled field first: e.g. "Sex: M", "Gender: Male", "Sexe: M/F"
+            labeled_sex = find_labeled_value(["sex", "gender", "sexe", "geschlecht"])
+            if labeled_sex:
+                l_upper = labeled_sex.upper()
+                if "FEMALE" in l_upper or l_upper.startswith("F"):
+                    information["sex"] = "Female"
+                elif "MALE" in l_upper or l_upper.startswith("M"):
+                    information["sex"] = "Male"
+                else:
+                    information["sex"] = labeled_sex
 
         if not information["sex"]:
-
-            sex_match = re.search(
-                r"\b([MF])\s*/?\s*[MF]?\b",
-                upper_text,
-            )
-
-            if sex_match:
-                information["sex"] = (
-                    sex_match.group(1)
-                )
+            # Regex match standalone "Male", "Female", or "Sex: M/F"
+            if re.search(r"\b(FEMALE|WOMAN)\b", upper_text):
+                information["sex"] = "Female"
+            elif re.search(r"\b(MALE|MAN)\b", upper_text):
+                information["sex"] = "Male"
+            else:
+                sex_match = re.search(r"\bSEX\b\s*[:\-]?\s*([MF])\b", upper_text)
+                if sex_match:
+                    information["sex"] = "Male" if sex_match.group(1) == "M" else "Female"
+                else:
+                    # Generic single letter M or F following standard passport layout
+                    single_letter_m = re.search(r"\b([MF])\s*/\s*[MF]\b", upper_text)
+                    if single_letter_m:
+                        information["sex"] = "Male" if single_letter_m.group(1) == "M" else "Female"
 
         # ----------------------------------------------------
         # 9. FORCE DOCUMENT TYPE IN THE EXTRACTED INFO

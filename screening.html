@@ -1869,7 +1869,10 @@ function showResults(data){
     /* ── Safe get from docInfo, also try extracted_fields / mrzData as fallback ── */
     const ef = data.extracted_fields || {};
     function fi(key){
-      const v = docInfo[key];
+      let v = docInfo[key];
+      if(key === "sex" && (!v || v === "Not detected")){
+        v = docInfo["gender"] || docInfo["Sex"] || docInfo["Gender"];
+      }
       if(v && v !== "Not detected") return v;
       /* Fallback: check extracted_fields for name/doc_number */
       if(key === "name"){
@@ -1889,8 +1892,10 @@ function showResults(data){
       if(key === "date_of_expiry" && mrzData && mrzData.expiry_date){
         return mrzData.expiry_date;
       }
-      if(key === "sex" && mrzData && mrzData.sex){
-        return mrzData.sex;
+      if(key === "sex"){
+        if(mrzData && mrzData.sex) return mrzData.sex === "M" ? "Male" : mrzData.sex === "F" ? "Female" : mrzData.sex;
+        if(/\b(FEMALE|WOMAN)\b/i.test(ocrText)) return "Female";
+        if(/\b(MALE|MAN)\b/i.test(ocrText)) return "Male";
       }
       return v || "Not detected";
     }
