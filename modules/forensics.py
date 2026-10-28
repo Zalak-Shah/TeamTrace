@@ -21,8 +21,20 @@ import io
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
-import cv2
-import numpy as np
+try:
+    import cv2
+    _CV2_AVAILABLE = True
+except ImportError:
+    cv2 = None
+    _CV2_AVAILABLE = False
+
+try:
+    import numpy as np
+    _NUMPY_AVAILABLE = True
+except ImportError:
+    np = None
+    _NUMPY_AVAILABLE = False
+
 from PIL import Image, ImageChops, ImageEnhance
 
 
@@ -174,14 +186,22 @@ def analyze_frequency_spectrum(image_bytes: bytes) -> Tuple[bool, float, List[st
     produced by diffusion models (Midjourney, DALL-E, SD).
     """
     findings = []
-    try:
-        np_arr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(np_arr, cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            return False, 0.0, ["Image decoding failed for frequency analysis."]
+    if not _NUMPY_AVAILABLE or np is None:
+        return False, 0.0, ["Frequency analysis skipped (numpy unavailable)."]
 
-        # Resize for consistent spectrum analysis
-        resized = cv2.resize(img, (512, 512))
+    try:
+        if _CV2_AVAILABLE and cv2 is not None:
+            np_arr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(np_arr, cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                return False, 0.0, ["Image decoding failed for frequency analysis."]
+            resized = cv2.resize(img, (512, 512))
+        else:
+            # Fallback to PIL for decoding and resizing
+            pil_img = Image.open(io.BytesIO(image_bytes)).convert("L")
+            resized_pil = pil_img.resize((512, 512))
+            resized = np.array(resized_pil, dtype=np.uint8)
+
         f = np.fft.fft2(resized)
         fshift = np.fft.fftshift(f)
         magnitude_spectrum = 20 * np.log(np.abs(fshift) + 1e-9)

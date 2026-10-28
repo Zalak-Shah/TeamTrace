@@ -23,8 +23,20 @@ import re
 import zlib
 from typing import Any, Dict, Optional, Tuple
 
-import cv2
-import numpy as np
+try:
+    import cv2
+    _CV2_AVAILABLE = True
+except ImportError:
+    cv2 = None
+    _CV2_AVAILABLE = False
+
+try:
+    import numpy as np
+    _NUMPY_AVAILABLE = True
+except ImportError:
+    np = None
+    _NUMPY_AVAILABLE = False
+
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
@@ -113,31 +125,32 @@ def parse_decompressed_qr(decompressed: bytes) -> Dict[str, Any]:
 
 def decode_qr_from_image(image_bytes: bytes) -> Optional[bytes]:
     """
-    Attempts to read QR code raw bytes using OpenCV or pyzbar.
+    Attempts to read QR code raw bytes using pyzbar or OpenCV.
     """
-    np_arr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    if img is None:
-        return None
-
-    # 1. Try pyzbar if available
+    # 1. Try pyzbar with PIL/OpenCV if available
     try:
         from pyzbar.pyzbar import decode
-        decoded = decode(img)
+        from PIL import Image
+        pil_img = Image.open(io.BytesIO(image_bytes))
+        decoded = decode(pil_img)
         for obj in decoded:
             if obj.type == "QRCODE" and obj.data:
                 return obj.data
     except Exception:
         pass
 
-    # 2. Fallback to OpenCV QRCodeDetector
-    try:
-        detector = cv2.QRCodeDetector()
-        val, pts, _ = detector.detectAndDecode(img)
-        if val:
-            return val.encode("latin1")
-    except Exception:
-        pass
+    # 2. Try OpenCV decoder if cv2 and numpy are present
+    if _CV2_AVAILABLE and _NUMPY_AVAILABLE and cv2 is not None and np is not None:
+        try:
+            np_arr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if img is not None:
+                detector = cv2.QRCodeDetector()
+                val, pts, _ = detector.detectAndDecode(img)
+                if val:
+                    return val.encode("latin1")
+        except Exception:
+            pass
 
     return None
 
