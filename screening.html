@@ -1911,13 +1911,27 @@ function showResults(data){
         if(docInfo.date_of_birth) return docInfo.date_of_birth;
         if(mrzData && mrzData.date_of_birth) return mrzData.date_of_birth;
       }
+      if(key === "date_of_issue"){
+        if(docInfo.date_of_issue && docInfo.date_of_issue !== "Not detected") return docInfo.date_of_issue;
+        if(docInfo.valid_from && docInfo.valid_from !== "Not detected") return docInfo.valid_from;
+      }
       if(key === "date_of_expiry"){
-        if(docInfo.date_of_expiry) return docInfo.date_of_expiry;
+        if(docInfo.date_of_expiry && docInfo.date_of_expiry !== "Not detected") return docInfo.date_of_expiry;
+        if(docInfo.valid_until && docInfo.valid_until !== "Not detected") return docInfo.valid_until;
+        if(mrzData && mrzData.expiry_date) return mrzData.expiry_date;
+      }
+      if(key === "valid_from"){
+        if(docInfo.valid_from && docInfo.valid_from !== "Not detected") return docInfo.valid_from;
+        if(docInfo.date_of_issue && docInfo.date_of_issue !== "Not detected") return docInfo.date_of_issue;
+      }
+      if(key === "valid_until"){
+        if(docInfo.valid_until && docInfo.valid_until !== "Not detected") return docInfo.valid_until;
+        if(docInfo.date_of_expiry && docInfo.date_of_expiry !== "Not detected") return docInfo.date_of_expiry;
         if(mrzData && mrzData.expiry_date) return mrzData.expiry_date;
       }
       if(key === "sex" || key === "gender"){
-        if(docInfo.sex) return docInfo.sex;
-        if(docInfo.gender) return docInfo.gender;
+        if(docInfo.sex && docInfo.sex !== "Not detected") return docInfo.sex;
+        if(docInfo.gender && docInfo.gender !== "Not detected") return docInfo.gender;
         if(mrzData && (mrzData.gender || mrzData.sex)) {
           const s = mrzData.gender || mrzData.sex;
           return s === "M" ? "Male" : (s === "F" ? "Female" : s);
@@ -1925,9 +1939,9 @@ function showResults(data){
         if(/\b(FEMALE|WOMAN)\b/i.test(ocrText)) return "Female";
         if(/\b(MALE|MAN)\b/i.test(ocrText)) return "Male";
       }
-      if(key === "place_of_birth" && docInfo.place_of_birth) return docInfo.place_of_birth;
+      if(key === "place_of_birth" && docInfo.place_of_birth && docInfo.place_of_birth !== "Not detected") return docInfo.place_of_birth;
       if(key === "issuing_country"){
-        if(docInfo.issuing_country) return docInfo.issuing_country;
+        if(docInfo.issuing_country && docInfo.issuing_country !== "Not detected") return docInfo.issuing_country;
         if(mrzData && mrzData.issuing_country) return mrzData.issuing_country;
       }
       return v || "Not detected";
@@ -1976,7 +1990,8 @@ function showResults(data){
         fieldRow("Sex",           fi("sex")) +
         fieldRow("Address",       fi("address")) +
         fieldRow("Date of Issue", fi("date_of_issue")) +
-        fieldRow("Date of Expiry",fi("date_of_expiry"));
+        fieldRow("Date of Expiry",fi("date_of_expiry")) +
+        fieldRow("Issuing Authority", fi("issuing_country"));
     }
     else if(dt.includes("driving") || dt.includes("licence") || dt.includes("license")){
       docFieldsHTML =
@@ -2022,7 +2037,8 @@ function showResults(data){
         fieldRow("Permit Number", fi("permit_number") !== "Not detected" ? fi("permit_number") : fi("document_number"), true) +
         fieldRow("Permit Type",   fi("permit_type")) +
         fieldRow("Date of Issue", fi("date_of_issue")) +
-        fieldRow("Date of Expiry",fi("date_of_expiry"));
+        fieldRow("Date of Expiry",fi("date_of_expiry")) +
+        fieldRow("Issuing Authority / Company", fi("issuing_country"));
     }
     else{
       docFieldsHTML =
@@ -2073,21 +2089,24 @@ function showResults(data){
     let mrzSection = "";
     const hasMrz = Object.keys(mrzData).length > 0;
 
-    if(dt.includes("passport") || hasMrz){
+    if(dt.includes("passport") || dt.includes("national") || dt.includes("visa") || hasMrz){
       const mrzLine1 = mrzData.line1 || mrzData.mrz_line1 || mrzData.raw_line1 || "";
       const mrzLine2 = mrzData.line2 || mrzData.mrz_line2 || mrzData.raw_line2 || "";
-      const mrzLines = [mrzLine1, mrzLine2].filter(Boolean);
+      const mrzLine3 = mrzData.line3 || mrzData.mrz_line3 || "";
+      const mrzLines = [mrzLine1, mrzLine2, mrzLine3].filter(Boolean);
 
       const mrzRaw = mrzLines.length
         ? mrzLines.join("\n")
         : (mrzData.raw || mrzData.mrz_raw || "");
 
+      const isValid = mrzData.check_digits_valid ?? mrzData.valid;
+
       mrzSection = `
         <div class="panel" style="margin-bottom:16px;">
           <div class="section-title">
-            <h3><i class="ti ti-barcode"></i> MRZ / Document Analysis</h3>
-            ${mrzData.valid !== undefined
-              ? `<span style="font-size:11px;padding:3px 10px;border-radius:99px;background:${mrzData.valid?"rgba(52,211,153,.15)":"rgba(248,113,113,.15)"};color:${mrzData.valid?"var(--valid)":"var(--high)"};">MRZ ${mrzData.valid?"VALID":"INVALID"}</span>`
+            <h3><i class="ti ti-barcode"></i> MRZ / Machine-Readable Zone Analysis</h3>
+            ${isValid !== undefined
+              ? `<span style="font-size:11px;padding:3px 10px;border-radius:99px;background:${isValid?"rgba(52,211,153,.15)":"rgba(248,113,113,.15)"};color:${isValid?"var(--valid)":"var(--high)"};">MRZ ${isValid?"VALID":"INVALID CHECKSUM"}</span>`
               : ""}
           </div>
           ${ mrzRaw ? `
@@ -2100,15 +2119,20 @@ function showResults(data){
               font-size:12px;
               color:var(--cyan);
               letter-spacing:1.5px;
+              white-space:pre-wrap;
               word-break:break-all;
+              line-height:1.8;
               margin-bottom:14px;">${escapeHTML(mrzRaw)}</div>` : "" }
+          ${ fieldRow("MRZ Format",     mrzData.format || (mrzLines.length === 3 ? "TD1 (ID Card / Border Card)" : mrzLines.length === 2 ? "TD3 (Passport)" : "Machine Readable Zone")) }
           ${ fieldRow("Full Name",      mrzData.name || (mrzData.surname ? `${mrzData.given_names || ""} ${mrzData.surname}`.trim() : null)) }
+          ${ (mrzData.surname) ? fieldRow("Surname", mrzData.surname) : "" }
+          ${ (mrzData.given_names) ? fieldRow("Given Names", mrzData.given_names) : "" }
           ${ fieldRow("Document No.",   mrzData.doc_number || mrzData.document_number || mrzData.doc_num, true) }
           ${ fieldRow("Nationality",    mrzData.nationality) }
           ${ fieldRow("Date of Birth",  mrzData.date_of_birth || mrzData.dob) }
-          ${ fieldRow("Sex",            mrzData.sex) }
+          ${ fieldRow("Sex / Gender",   mrzData.gender || mrzData.sex) }
           ${ fieldRow("Expiry Date",    mrzData.expiry_date || mrzData.date_of_expiry) }
-          ${ !hasMrz && !mrzRaw ? '<div style="color:var(--text-5);font-size:12.5px;padding:12px 0;">No MRZ data detected in this document.</div>' : "" }
+          ${ !hasMrz && !mrzRaw ? '<div style="color:var(--text-5);font-size:12.5px;padding:12px 0;">No MRZ pattern detected in this document. Standard visual OCR fields are shown above.</div>' : "" }
         </div>`;
     }
 
