@@ -310,21 +310,40 @@ def to_date(value: Optional[str]) -> Optional[date]:
     if not value:
         return None
 
+    val_str = str(value).strip()
+
     formats = [
         "%d/%m/%Y",
         "%d-%m-%Y",
         "%Y-%m-%d",
         "%Y/%m/%d",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%d-%b-%Y",
+        "%d-%B-%Y",
+        "%b %d %Y",
+        "%B %d %Y",
+        "%b %d, %Y",
+        "%B %d, %Y",
     ]
 
     for fmt in formats:
         try:
             return datetime.strptime(
-                value,
+                val_str,
                 fmt,
             ).date()
         except ValueError:
             continue
+
+    # Try normalizing bilingual months (e.g. 23 APR/AVR 1984 or 25 STY/JAN 2023)
+    cleaned_val = re.sub(r"[A-Z]{3,4}/([A-Z]{3})", r"\1", val_str, flags=re.IGNORECASE)
+    cleaned_val = re.sub(r"([A-Z]{3})/[A-Z]{3,4}", r"\1", cleaned_val, flags=re.IGNORECASE)
+    for fmt in ("%d %b %Y", "%d-%b-%Y"):
+        try:
+            return datetime.strptime(cleaned_val, fmt).date()
+        except ValueError:
+            pass
 
     return None
 
@@ -993,9 +1012,9 @@ def extract_document_information(
 
                 label_lower = label.lower()
 
-                # Case 1: Label and value on same line: e.g. "Entries: MULTIPLE"
+                # Case 1: Label and value on same line: e.g. "Nationality: USA" or "Nationality USA" or "DOB 01/01/1990"
                 pattern = (
-                    rf"\b{re.escape(label_lower)}\b\s*[:\-#]\s*(.+)$"
+                    rf"\b{re.escape(label_lower)}\b\s*[:\-#]?\s+([A-Za-z0-9/.\- ]+)$"
                 )
 
                 match = re.search(
@@ -1160,6 +1179,14 @@ def extract_document_information(
         # ----------------------------------------------------
 
         if not information["document_number"]:
+            p_num = find_labeled_value([
+                "passport no", "passport number", "passport no.", "passeport no",
+                "no du passeport", "document no", "document number",
+            ])
+            if p_num:
+                clean_p = re.sub(r"[^A-Za-z0-9]", "", p_num).upper()
+                if 6 <= len(clean_p) <= 12 and any(c.isdigit() for c in clean_p):
+                    information["document_number"] = clean_p
 
             passport_number_patterns = [
                 r"\b[A-Z]{2}\s*\d{7}\b",
@@ -1190,31 +1217,37 @@ def extract_document_information(
                         break
 
         # ----------------------------------------------------
-        # 4. NATIONALITY FALLBACK
+        # 4. NATIONALITY EXTRACTION
         # ----------------------------------------------------
+        if not information["nationality"]:
+            nat_val = find_labeled_value([
+                "nationality", "citizenship", "nationalite", "staatsangehorigkeit",
+                "obywatelstwo", "nacionalidad",
+            ])
+            if nat_val:
+                information["nationality"] = nat_val
 
         if not information["nationality"]:
-
-            nationality_patterns = [
-                r"\b(POL)\b",
-                r"\b(IND)\b",
-                r"\b(USA)\b",
-                r"\b(GBR)\b",
-                r"\b(CAN)\b",
-                r"\b(AUS)\b",
+            # Check ISO codes and common country names
+            common_nationalities = [
+                ("USA", r"\b(USA|UNITED STATES|AMERICAN)\b"),
+                ("IND", r"\b(IND|INDIAN|INDIA)\b"),
+                ("GBR", r"\b(GBR|BRITISH|UNITED KINGDOM)\b"),
+                ("CAN", r"\b(CAN|CANADIAN|CANADA)\b"),
+                ("AUS", r"\b(AUS|AUSTRALIAN|AUSTRALIA)\b"),
+                ("POL", r"\b(POL|POLISH|POLAND|POLSKA)\b"),
+                ("DEU", r"\b(DEU|GERMAN|GERMANY|DEUTSCHLAND)\b"),
+                ("FRA", r"\b(FRA|FRENCH|FRANCE)\b"),
+                ("ITA", r"\b(ITA|ITALIAN|ITALY)\b"),
+                ("ESP", r"\b(ESP|SPANISH|SPAIN)\b"),
+                ("CHN", r"\b(CHN|CHINESE|CHINA)\b"),
+                ("JPN", r"\b(JPN|JAPANESE|JAPAN)\b"),
+                ("NPL", r"\b(NPL|NEPALESE|NEPAL)\b"),
+                ("BGD", r"\b(BGD|BANGLADESHI|BANGLADESH)\b"),
             ]
-
-            for pattern in nationality_patterns:
-
-                match = re.search(
-                    pattern,
-                    upper_text,
-                )
-
-                if match:
-                    information["nationality"] = (
-                        match.group(1)
-                    )
+            for code, pat in common_nationalities:
+                if re.search(pat, upper_text):
+                    information["nationality"] = code
                     break
 
         # ----------------------------------------------------
@@ -1293,20 +1326,20 @@ def extract_document_information(
                     normalized_value
                 )
 
-        # Also include normal numeric dates.
-        numeric_date_pattern = re.compile(
-            r"\b"
-            r"(?:\d{2}[/-]\d{2}[/-]\d{4}|"
-            r"\d{4}[/-]\d{2}[/-]\d{2})"
-            r"\b"
+        # Also include all month formats like '04 Aug 1995', 'August 4, 1995', '04-Aug-1995', '04/08/1995'
+        general_date_pattern = re.compile(
+            r"\b(?:"
+            r"\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|"
+            r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}|"
+            r"\d{1,2}[/\-.](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[/\-.]\d{4}|"
+            r"\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4}|"
+            r"\d{4}[/\-.]\d{1,2}[/\-.]\d{1,2}"
+            r")\b",
+            re.IGNORECASE,
         )
 
-        for match in numeric_date_pattern.finditer(
-            text
-        ):
-
-            value = match.group(0)
-
+        for match in general_date_pattern.finditer(text):
+            value = match.group(0).strip()
             if value not in passport_dates:
                 passport_dates.append(value)
 
@@ -2060,25 +2093,17 @@ def extract_document_information(
         "date_of_issue",
         "date_of_expiry",
     ]:
-
         value = information.get(key)
-
         if value:
-
-            match = DATE_RE.search(
-                str(value)
-            )
-
-            if match:
-
-                parsed = to_date(
-                    match.group(0)
-                )
-
-                if parsed:
-                    information[key] = (
-                        parsed.isoformat()
-                    )
+            parsed = to_date(str(value))
+            if parsed:
+                information[key] = parsed.strftime("%d/%m/%Y")
+            else:
+                match = DATE_RE.search(str(value))
+                if match:
+                    parsed2 = to_date(match.group(0))
+                    if parsed2:
+                        information[key] = parsed2.strftime("%d/%m/%Y")
 
     # ========================================================
     # RAW DATES FROM OCR
